@@ -1,0 +1,26 @@
+---
+# Example CI/CD workflow for Docker applications
+# Projects: mail_box_indexer, wildduck
+#
+# Copy this file to your project's .github/workflows/ci-cd.yml
+
+name: CI/CD
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  cicd:
+    uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
+    with:
+      project-type: "docker-app"
+      docker-image-name: "mail_box_indexer"  # Change to your Docker image name
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+      DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}

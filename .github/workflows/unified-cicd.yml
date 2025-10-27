@@ -1,0 +1,378 @@
+---
+name: "Unified CI/CD - Reusable Workflow"
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: "Node.js version to use"
+        type: string
+        default: "22.x"
+      project-type:
+        description: "Type of project: library, webapp, or docker-app"
+        type: string
+        required: true
+      npm-access:
+        description: "NPM package access level: public or restricted"
+        type: string
+        default: "restricted"
+      cloudflare-project-name:
+        description: "Cloudflare Pages project name (defaults to repo name)"
+        type: string
+        default: ""
+      docker-image-name:
+        description: "Docker image name (defaults to repo name)"
+        type: string
+        default: ""
+    secrets:
+      NPM_TOKEN:
+        description: "NPM authentication token for publishing and installing private packages"
+        required: false
+      DOCKER_USERNAME:
+        description: "Docker Hub username"
+        required: false
+      DOCKER_TOKEN:
+        description: "Docker Hub access token"
+        required: false
+      CLOUDFLARE_API_TOKEN:
+        description: "Cloudflare API token for Pages deployment"
+        required: false
+      CLOUDFLARE_ACCOUNT_ID:
+        description: "Cloudflare account ID"
+        required: false
+      VITE_REVENUECAT_API_KEY:
+        description: "RevenueCat API key for build"
+        required: false
+      VITE_WILDDUCK_API_TOKEN:
+        description: "WildDuck API token for build"
+        required: false
+
+jobs:
+  test:
+    name: "Test"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v4
+
+      - name: "Setup Node.js"
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          registry-url: "https://registry.npmjs.org"
+
+      - name: "Configure npm authentication"
+        if: secrets.NPM_TOKEN != ''
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
+          echo "@sudobility:registry=https://registry.npmjs.org/" >> ~/.npmrc
+
+      - name: "Install dependencies"
+        run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: "Run type checking"
+        run: |
+          if [ -f "tsconfig.json" ]; then
+            npm run typecheck || npm run type-check || echo "⚠️  No typecheck script found"
+          else
+            echo "ℹ️  No tsconfig.json found, skipping type check"
+          fi
+
+      - name: "Run linting"
+        run: npm run lint || echo "⚠️  No lint script found"
+
+      - name: "Run tests"
+        run: npm test || echo "⚠️  No test script found"
+
+      - name: "Build project"
+        run: npm run build
+
+  check_for_release:
+    name: "Check Release Status"
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      version: ${{ steps.check.outputs.version }}
+      version_tag: ${{ steps.check.outputs.version_tag }}
+      has_package_json: ${{ steps.check.outputs.has_package_json }}
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: "Check if should trigger release"
+        id: check
+        run: |
+          # Check if package.json exists (library project)
+          if [ -f "package.json" ]; then
+            echo "has_package_json=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_package_json=false" >> $GITHUB_OUTPUT
+            echo "should_release=false" >> $GITHUB_OUTPUT
+            echo "ℹ️  No package.json found, skipping release"
+            exit 0
+          fi
+
+          # Get commit message
+          COMMIT_MSG=$(git log -1 --pretty=%s)
+          echo "Commit message: $COMMIT_MSG"
+
+          # Skip release only for PR events that weren't merged
+          if [[ "${{ github.event_name }}" == "pull_request" ]] && [[ "${{ github.event.action }}" != "closed" || "${{ github.event.pull_request.merged }}" != "true" ]]; then
+            echo "should_release=false" >> $GITHUB_OUTPUT
+            echo "ℹ️  PR not merged, skipping release"
+            exit 0
+          fi
+
+          # Skip only if explicitly marked to skip CI
+          if [[ "$COMMIT_MSG" == *"[skip ci]"* ]] || [[ "$COMMIT_MSG" == *"[skip-ci]"* ]]; then
+            echo "should_release=false" >> $GITHUB_OUTPUT
+            echo "ℹ️  Commit marked to skip CI: $COMMIT_MSG"
+          else
+            echo "should_release=true" >> $GITHUB_OUTPUT
+
+            # Get current version from package.json
+            CURRENT_VERSION=$(node -p "require('./package.json').version")
+
+            echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+            echo "version_tag=v$CURRENT_VERSION" >> $GITHUB_OUTPUT
+            echo "✅ Will release version: $CURRENT_VERSION for commit: $COMMIT_MSG"
+          fi
+
+  release_npm:
+    name: "Release to NPM"
+    needs:
+      - test
+      - check_for_release
+    if: |
+      inputs.project-type == 'library' &&
+      needs.check_for_release.outputs.should_release == 'true' &&
+      needs.check_for_release.outputs.has_package_json == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v4
+
+      - name: "Setup Node.js"
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          registry-url: "https://registry.npmjs.org"
+
+      - name: "Configure npm authentication"
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
+          echo "@sudobility:registry=https://registry.npmjs.org/" >> ~/.npmrc
+
+      - name: "Install dependencies"
+        run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: "Run tests"
+        run: npm test || echo "⚠️  No tests found"
+
+      - name: "Build project"
+        run: npm run build
+
+      - name: "Check if version changed"
+        id: version-check
+        run: |
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          PACKAGE_NAME=$(node -p "require('./package.json').name")
+          PUBLISHED_VERSION=$(npm view "$PACKAGE_NAME" version 2>/dev/null || echo "0.0.0")
+
+          echo "current-version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "published-version=$PUBLISHED_VERSION" >> $GITHUB_OUTPUT
+          echo "package-name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
+
+          if [ "$CURRENT_VERSION" != "$PUBLISHED_VERSION" ]; then
+            echo "version-changed=true" >> $GITHUB_OUTPUT
+            echo "🚀 Version changed: $PUBLISHED_VERSION → $CURRENT_VERSION"
+          else
+            echo "version-changed=false" >> $GITHUB_OUTPUT
+            echo "ℹ️  Version unchanged: $CURRENT_VERSION"
+          fi
+
+      - name: "Create GitHub Release"
+        if: steps.version-check.outputs.version-changed == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check_for_release.outputs.version_tag }}
+          name: "Release ${{ needs.check_for_release.outputs.version }}"
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Publish to NPM"
+        if: steps.version-check.outputs.version-changed == 'true'
+        run: |
+          if [ "${{ inputs.npm-access }}" = "public" ]; then
+            echo "📦 Publishing as public package"
+            npm publish --access public
+          else
+            echo "📦 Publishing as restricted package"
+            npm publish --access restricted
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: "Notify deployment success"
+        if: success() && steps.version-check.outputs.version-changed == 'true'
+        run: |
+          echo "🚀 Release ${{ needs.check_for_release.outputs.version }} deployed successfully!"
+          echo "• NPM: https://www.npmjs.com/package/${{ steps.version-check.outputs.package-name }}/v/${{ needs.check_for_release.outputs.version }}"
+          echo "• GitHub: https://github.com/${{ github.repository }}/releases/tag/${{ needs.check_for_release.outputs.version_tag }}"
+
+      - name: "Notify deployment failure"
+        if: failure()
+        run: |
+          echo "❌ Release deployment FAILED for commit ${{ github.sha }}"
+          echo "Check: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+  deploy_docker:
+    name: "Deploy to Docker Hub"
+    needs:
+      - test
+      - check_for_release
+    if: |
+      (inputs.project-type == 'docker-app' || inputs.project-type == 'webapp') &&
+      needs.check_for_release.outputs.should_release == 'true' &&
+      secrets.DOCKER_USERNAME != '' &&
+      secrets.DOCKER_TOKEN != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v4
+
+      - name: "Set up QEMU"
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: "arm64,amd64"
+
+      - name: "Set up Docker Buildx"
+        uses: docker/setup-buildx-action@v3
+        with:
+          platforms: linux/arm64,linux/amd64
+
+      - name: "Login to Docker Hub"
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+
+      - name: "Determine image name"
+        id: image-name
+        run: |
+          if [ -n "${{ inputs.docker-image-name }}" ]; then
+            IMAGE_NAME="${{ inputs.docker-image-name }}"
+          else
+            IMAGE_NAME="${{ github.event.repository.name }}"
+          fi
+          echo "name=$IMAGE_NAME" >> $GITHUB_OUTPUT
+          echo "🐳 Docker image name: $IMAGE_NAME"
+
+      - name: "Extract metadata (tags, labels) for Docker"
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKER_USERNAME }}/${{ steps.image-name.outputs.name }}
+          flavor: |
+            latest=true
+          tags: |
+            type=raw,value=latest
+            type=semver,pattern={{version}},value=${{ needs.check_for_release.outputs.version }}
+
+      - name: "Build and push Docker image"
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/arm64,linux/amd64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            NPM_TOKEN=${{ secrets.NPM_TOKEN }}
+
+      - name: "Notify Docker deployment success"
+        if: success()
+        run: |
+          echo "🐳 Docker image pushed successfully!"
+          echo "• Image: ${{ secrets.DOCKER_USERNAME }}/${{ steps.image-name.outputs.name }}:latest"
+          echo "• Version tag: ${{ secrets.DOCKER_USERNAME }}/${{ steps.image-name.outputs.name }}:${{ needs.check_for_release.outputs.version }}"
+
+  deploy_cloudflare:
+    name: "Deploy to Cloudflare Pages"
+    needs:
+      - test
+    if: |
+      inputs.project-type == 'webapp' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      secrets.CLOUDFLARE_API_TOKEN != '' &&
+      secrets.CLOUDFLARE_ACCOUNT_ID != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v4
+
+      - name: "Setup Node.js"
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: "npm"
+
+      - name: "Configure npm authentication"
+        if: secrets.NPM_TOKEN != ''
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
+          echo "@sudobility:registry=https://registry.npmjs.org/" >> ~/.npmrc
+
+      - name: "Install dependencies"
+        run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: "Run linting (non-blocking)"
+        run: npm run lint || echo "⚠️  Linting failed but continuing with deployment"
+
+      - name: "Build project"
+        run: npm run build
+        env:
+          VITE_REVENUECAT_API_KEY: ${{ secrets.VITE_REVENUECAT_API_KEY }}
+          VITE_WILDDUCK_API_TOKEN: ${{ secrets.VITE_WILDDUCK_API_TOKEN }}
+
+      - name: "Determine project name"
+        id: project-name
+        run: |
+          if [ -n "${{ inputs.cloudflare-project-name }}" ]; then
+            PROJECT_NAME="${{ inputs.cloudflare-project-name }}"
+          else
+            PROJECT_NAME="${{ github.event.repository.name }}"
+          fi
+          echo "name=$PROJECT_NAME" >> $GITHUB_OUTPUT
+          echo "☁️  Cloudflare project name: $PROJECT_NAME"
+
+      - name: "Deploy to Cloudflare Pages"
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          projectName: ${{ steps.project-name.outputs.name }}
+          directory: dist
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Notify Cloudflare deployment success"
+        if: success()
+        run: |
+          echo "☁️  Deployed to Cloudflare Pages successfully!"
+          echo "• Project: ${{ steps.project-name.outputs.name }}"

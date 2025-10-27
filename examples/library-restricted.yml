@@ -1,0 +1,25 @@
+---
+# Example CI/CD workflow for RESTRICTED (private) library projects
+# Projects: di, mail_box_components, mail_box_configs, mail_box_contracts,
+#           mail_box_indexer_client, mail_box_lib, types, wildduck_client
+#
+# Copy this file to your project's .github/workflows/ci-cd.yml
+
+name: CI/CD
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  cicd:
+    uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
+    with:
+      project-type: "library"
+      npm-access: "restricted"
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

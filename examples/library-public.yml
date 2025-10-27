@@ -1,0 +1,24 @@
+---
+# Example CI/CD workflow for PUBLIC library projects
+# Projects: design_system
+#
+# Copy this file to your project's .github/workflows/ci-cd.yml
+
+name: CI/CD
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  cicd:
+    uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
+    with:
+      project-type: "library"
+      npm-access: "public"
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
