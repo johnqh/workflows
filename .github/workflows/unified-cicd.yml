@@ -68,7 +68,16 @@ jobs:
           echo "@sudobility:registry=https://registry.npmjs.org/" >> ~/.npmrc
 
       - name: "Install dependencies"
-        run: npm ci
+        run: |
+          # Workaround for Rollup optional dependencies issue
+          # https://github.com/npm/cli/issues/4828
+          if grep -q '"rollup"' package.json 2>/dev/null; then
+            echo "📦 Detected Rollup, using workaround for optional dependencies"
+            rm -rf node_modules package-lock.json
+            npm install
+          else
+            npm ci
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -338,7 +347,16 @@ jobs:
           echo "@sudobility:registry=https://registry.npmjs.org/" >> ~/.npmrc
 
       - name: "Install dependencies"
-        run: npm ci
+        run: |
+          # Workaround for Rollup optional dependencies issue
+          # https://github.com/npm/cli/issues/4828
+          if grep -q '"rollup"' package.json 2>/dev/null; then
+            echo "📦 Detected Rollup, using workaround for optional dependencies"
+            rm -rf node_modules package-lock.json
+            npm install
+          else
+            npm ci
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
