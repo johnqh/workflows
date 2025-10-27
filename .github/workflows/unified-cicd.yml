@@ -62,10 +62,13 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       - name: "Configure npm authentication"
-        if: secrets.NPM_TOKEN != ''
         run: |
-          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
-          echo "@sudobility:registry=https://registry.npmjs.org/" >> ~/.npmrc
+          if [ -n "${{ secrets.NPM_TOKEN }}" ]; then
+            echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
+            echo "@sudobility:registry=https://registry.npmjs.org/" >> ~/.npmrc
+          else
+            echo "ℹ️  No NPM_TOKEN provided, skipping authentication"
+          fi
 
       - name: "Install dependencies"
         run: |
@@ -273,9 +276,7 @@ jobs:
       - check_for_release
     if: |
       (inputs.project-type == 'docker-app' || inputs.project-type == 'webapp') &&
-      needs.check_for_release.outputs.should_release == 'true' &&
-      secrets.DOCKER_USERNAME != '' &&
-      secrets.DOCKER_TOKEN != ''
+      needs.check_for_release.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: "Checkout"
@@ -344,9 +345,7 @@ jobs:
     if: |
       inputs.project-type == 'webapp' &&
       github.event_name == 'push' &&
-      github.ref == 'refs/heads/main' &&
-      secrets.CLOUDFLARE_API_TOKEN != '' &&
-      secrets.CLOUDFLARE_ACCOUNT_ID != ''
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -362,10 +361,13 @@ jobs:
           cache: "npm"
 
       - name: "Configure npm authentication"
-        if: secrets.NPM_TOKEN != ''
         run: |
-          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
-          echo "@sudobility:registry=https://registry.npmjs.org/" >> ~/.npmrc
+          if [ -n "${{ secrets.NPM_TOKEN }}" ]; then
+            echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
+            echo "@sudobility:registry=https://registry.npmjs.org/" >> ~/.npmrc
+          else
+            echo "ℹ️  No NPM_TOKEN provided, skipping authentication"
+          fi
 
       - name: "Install dependencies"
         run: |
