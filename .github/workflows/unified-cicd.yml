@@ -96,7 +96,14 @@ jobs:
         run: npm test || echo "⚠️  No test script found"
 
       - name: "Build project"
-        run: npm run build
+        run: |
+          # Use build:ci if available (e.g., for mail_box_contracts without cargo)
+          if grep -q '"build:ci"' package.json 2>/dev/null; then
+            echo "📦 Using build:ci script"
+            npm run build:ci
+          else
+            npm run build
+          fi
 
   check_for_release:
     name: "Check Release Status"
@@ -188,7 +195,14 @@ jobs:
         run: npm test || echo "⚠️  No tests found"
 
       - name: "Build project"
-        run: npm run build
+        run: |
+          # Use build:ci if available (e.g., for mail_box_contracts without cargo)
+          if grep -q '"build:ci"' package.json 2>/dev/null; then
+            echo "📦 Using build:ci script"
+            npm run build:ci
+          else
+            npm run build
+          fi
 
       - name: "Check if version changed"
         id: version-check

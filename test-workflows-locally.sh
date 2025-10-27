@@ -105,11 +105,21 @@ test_project() {
 
     # Build
     echo -e "${BLUE}   5. Running build...${NC}"
-    if npm run build; then
-        echo -e "${GREEN}   ✅ Build succeeded${NC}"
+    # Use build:ci for mail_box_contracts (skips Solana cargo build)
+    if [ "$project" = "mail_box_contracts" ] && grep -q '"build:ci"' package.json 2>/dev/null; then
+        if npm run build:ci; then
+            echo -e "${GREEN}   ✅ Build succeeded (using build:ci)${NC}"
+        else
+            echo -e "${RED}   ❌ Build failed${NC}"
+            return 1
+        fi
     else
-        echo -e "${RED}   ❌ Build failed${NC}"
-        return 1
+        if npm run build; then
+            echo -e "${GREEN}   ✅ Build succeeded${NC}"
+        else
+            echo -e "${RED}   ❌ Build failed${NC}"
+            return 1
+        fi
     fi
 
     echo -e "${GREEN}   ✅ Project $project validated successfully${NC}"
