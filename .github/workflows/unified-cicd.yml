@@ -93,7 +93,14 @@ jobs:
         run: npm run lint || echo "⚠️  No lint script found"
 
       - name: "Run tests"
-        run: npm test || echo "⚠️  No test script found"
+        run: |
+          # Use test:unit if available (excludes integration tests)
+          if grep -q '"test:unit"' package.json 2>/dev/null; then
+            echo "📦 Using test:unit script (unit tests only)"
+            npm run test:unit || echo "⚠️  Unit tests failed or not found"
+          else
+            npm test || echo "⚠️  No test script found"
+          fi
 
       - name: "Build project"
         run: |

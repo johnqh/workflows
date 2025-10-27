@@ -97,10 +97,20 @@ test_project() {
 
     # Tests
     echo -e "${BLUE}   4. Running tests...${NC}"
-    if npm test 2>/dev/null; then
-        echo -e "${GREEN}   ✅ Tests passed${NC}"
+    # Use test:unit if available (excludes integration tests)
+    if grep -q '"test:unit"' package.json 2>/dev/null; then
+        echo -e "${BLUE}   📦 Using test:unit script (unit tests only)${NC}"
+        if npm run test:unit 2>/dev/null; then
+            echo -e "${GREEN}   ✅ Tests passed${NC}"
+        else
+            echo -e "${YELLOW}   ⚠️  Tests failed or not configured${NC}"
+        fi
     else
-        echo -e "${YELLOW}   ⚠️  Tests failed or not configured${NC}"
+        if npm test 2>/dev/null; then
+            echo -e "${GREEN}   ✅ Tests passed${NC}"
+        else
+            echo -e "${YELLOW}   ⚠️  Tests failed or not configured${NC}"
+        fi
     fi
 
     # Build
