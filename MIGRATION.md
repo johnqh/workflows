@@ -258,7 +258,7 @@ git push origin main
 
 **Solution:** Verify secrets are set in repository settings:
 - Go to Settings → Secrets and variables → Actions
-- Ensure `NPM_TOKEN`, `DOCKER_USERNAME`, etc. are set
+- Ensure `NPM_TOKEN`, `DOCKERHUB_USERNAME`, etc. are set
 
 ### Issue: NPM publish fails
 **Error:** 403 Forbidden or 404 Not Found

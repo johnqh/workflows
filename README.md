@@ -81,8 +81,8 @@ jobs:
       docker-image-name: "mail_box_indexer"  # optional, defaults to repo name
     secrets:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-      DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
 ```
 
 ## Configuration Options
@@ -102,8 +102,8 @@ jobs:
 | Secret | Required For | Description |
 |--------|--------------|-------------|
 | `NPM_TOKEN` | All projects with npm dependencies | NPM authentication token |
-| `DOCKER_USERNAME` | Docker apps | Docker Hub username |
-| `DOCKER_TOKEN` | Docker apps | Docker Hub access token |
+| `DOCKERHUB_USERNAME` | Docker apps | Docker Hub username |
+| `DOCKERHUB_TOKEN` | Docker apps | Docker Hub access token |
 | `CLOUDFLARE_API_TOKEN` | Web apps | Cloudflare API token |
 | `CLOUDFLARE_ACCOUNT_ID` | Web apps | Cloudflare account ID |
 | `VITE_REVENUECAT_API_KEY` | Web apps (optional) | RevenueCat API key for build |
@@ -177,7 +177,7 @@ The workflow automatically:
 ## Docker Deployment
 
 Docker deployment is **conditional** and only runs when:
-- `DOCKER_USERNAME` and `DOCKER_TOKEN` secrets are set
+- `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets are set
 - Project has a `Dockerfile`
 
 Features:
@@ -244,8 +244,8 @@ secrets:
 with:
   project-type: "docker-app"
 secrets:
-  DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-  DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+  DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
 ```
 
 ## Troubleshooting
@@ -259,7 +259,7 @@ secrets:
 ### Docker build fails
 
 - Ensure `Dockerfile` exists in repository root
-- Check that `DOCKER_USERNAME` and `DOCKER_TOKEN` are set
+- Check that `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` are set
 - Verify Docker Hub credentials are valid
 
 ### Cloudflare deployment fails

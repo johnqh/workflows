@@ -159,8 +159,8 @@ secrets:
 with:
   project-type: "docker-app"
 secrets:
-  DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-  DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+  DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
 ```
 
 ## Required Secrets
@@ -178,8 +178,8 @@ secrets:
 - `VITE_WILDDUCK_API_TOKEN` - (optional) Build-time environment variable
 
 ### Docker Applications (additionally)
-- `DOCKER_USERNAME` - Docker Hub username
-- `DOCKER_TOKEN` - Docker Hub access token
+- `DOCKERHUB_USERNAME` - Docker Hub username
+- `DOCKERHUB_TOKEN` - Docker Hub access token
 
 ## Maintenance
 

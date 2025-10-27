@@ -27,5 +27,5 @@ jobs:
       docker-image-name: "mail_box_indexer"  # Change to your Docker image name
     secrets:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-      DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
