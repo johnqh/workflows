@@ -40,6 +40,21 @@ on:
       CLOUDFLARE_ACCOUNT_ID:
         description: "Cloudflare account ID"
         required: false
+      RAILWAY_TOKEN:
+        description: "Railway API token for deployment"
+        required: false
+      RAILWAY_SERVICE:
+        description: "Railway service name/ID to deploy"
+        required: false
+      VERCEL_TOKEN:
+        description: "Vercel API token for deployment"
+        required: false
+      VERCEL_ORG_ID:
+        description: "Vercel organization ID"
+        required: false
+      VERCEL_PROJECT_ID:
+        description: "Vercel project ID"
+        required: false
       VITE_REVENUECAT_API_KEY:
         description: "RevenueCat API key for build"
         required: false
@@ -342,25 +357,39 @@ jobs:
     name: "Deploy to Cloudflare Pages"
     needs:
       - test
+      - check_for_release
     if: |
       inputs.project-type == 'webapp' &&
-      github.event_name == 'push' &&
-      github.ref == 'refs/heads/main'
+      needs.check_for_release.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       deployments: write
     steps:
+      - name: "Check if Cloudflare secrets are configured"
+        id: check-secrets
+        run: |
+          if [ -n "${{ secrets.CLOUDFLARE_API_TOKEN }}" ] && [ -n "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" ]; then
+            echo "configured=true" >> $GITHUB_OUTPUT
+            echo "✅ Cloudflare secrets are configured"
+          else
+            echo "configured=false" >> $GITHUB_OUTPUT
+            echo "ℹ️  Cloudflare secrets not configured, skipping deployment"
+          fi
+
       - name: "Checkout"
+        if: steps.check-secrets.outputs.configured == 'true'
         uses: actions/checkout@v4
 
       - name: "Setup Node.js"
+        if: steps.check-secrets.outputs.configured == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}
           cache: "npm"
 
       - name: "Configure npm authentication"
+        if: steps.check-secrets.outputs.configured == 'true'
         run: |
           if [ -n "${{ secrets.NPM_TOKEN }}" ]; then
             echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
@@ -370,6 +399,7 @@ jobs:
           fi
 
       - name: "Install dependencies"
+        if: steps.check-secrets.outputs.configured == 'true'
         run: |
           # Workaround for Rollup optional dependencies issue
           # https://github.com/npm/cli/issues/4828
@@ -384,15 +414,18 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: "Run linting (non-blocking)"
+        if: steps.check-secrets.outputs.configured == 'true'
         run: npm run lint || echo "⚠️  Linting failed but continuing with deployment"
 
       - name: "Build project"
+        if: steps.check-secrets.outputs.configured == 'true'
         run: npm run build
         env:
           VITE_REVENUECAT_API_KEY: ${{ secrets.VITE_REVENUECAT_API_KEY }}
           VITE_WILDDUCK_API_TOKEN: ${{ secrets.VITE_WILDDUCK_API_TOKEN }}
 
       - name: "Determine project name"
+        if: steps.check-secrets.outputs.configured == 'true'
         id: project-name
         run: |
           if [ -n "${{ inputs.cloudflare-project-name }}" ]; then
@@ -404,6 +437,7 @@ jobs:
           echo "☁️  Cloudflare project name: $PROJECT_NAME"
 
       - name: "Deploy to Cloudflare Pages"
+        if: steps.check-secrets.outputs.configured == 'true'
         uses: cloudflare/pages-action@v1
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -413,7 +447,181 @@ jobs:
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Notify Cloudflare deployment success"
-        if: success()
+        if: success() && steps.check-secrets.outputs.configured == 'true'
         run: |
           echo "☁️  Deployed to Cloudflare Pages successfully!"
           echo "• Project: ${{ steps.project-name.outputs.name }}"
+
+  deploy_railway:
+    name: "Deploy to Railway"
+    needs:
+      - test
+      - check_for_release
+    if: |
+      (inputs.project-type == 'webapp' || inputs.project-type == 'docker-app') &&
+      needs.check_for_release.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: "Check if Railway secrets are configured"
+        id: check-secrets
+        run: |
+          if [ -n "${{ secrets.RAILWAY_TOKEN }}" ] && [ -n "${{ secrets.RAILWAY_SERVICE }}" ]; then
+            echo "configured=true" >> $GITHUB_OUTPUT
+            echo "✅ Railway secrets are configured"
+          else
+            echo "configured=false" >> $GITHUB_OUTPUT
+            echo "ℹ️  Railway secrets not configured, skipping deployment"
+          fi
+
+      - name: "Checkout"
+        if: steps.check-secrets.outputs.configured == 'true'
+        uses: actions/checkout@v4
+
+      - name: "Setup Node.js"
+        if: steps.check-secrets.outputs.configured == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: "Configure npm authentication"
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: |
+          if [ -n "${{ secrets.NPM_TOKEN }}" ]; then
+            echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
+            echo "@sudobility:registry=https://registry.npmjs.org/" >> ~/.npmrc
+          else
+            echo "ℹ️  No NPM_TOKEN provided, skipping authentication"
+          fi
+
+      - name: "Install Railway CLI"
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: |
+          curl -fsSL https://railway.app/install.sh | sh
+          echo "$HOME/.railway/bin" >> $GITHUB_PATH
+
+      - name: "Deploy to Railway"
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: |
+          railway link ${{ secrets.RAILWAY_SERVICE }}
+          railway up --detach
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
+      - name: "Notify Railway deployment success"
+        if: success() && steps.check-secrets.outputs.configured == 'true'
+        run: |
+          echo "🚂 Deployed to Railway successfully!"
+          echo "• Service: ${{ secrets.RAILWAY_SERVICE }}"
+
+      - name: "Notify Railway deployment failure"
+        if: failure() && steps.check-secrets.outputs.configured == 'true'
+        run: |
+          echo "❌ Railway deployment FAILED for commit ${{ github.sha }}"
+          echo "Check: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+  deploy_vercel:
+    name: "Deploy to Vercel"
+    needs:
+      - test
+      - check_for_release
+    if: |
+      inputs.project-type == 'webapp' &&
+      needs.check_for_release.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - name: "Check if Vercel secrets are configured"
+        id: check-secrets
+        run: |
+          if [ -n "${{ secrets.VERCEL_TOKEN }}" ] && [ -n "${{ secrets.VERCEL_ORG_ID }}" ] && [ -n "${{ secrets.VERCEL_PROJECT_ID }}" ]; then
+            echo "configured=true" >> $GITHUB_OUTPUT
+            echo "✅ Vercel secrets are configured"
+          else
+            echo "configured=false" >> $GITHUB_OUTPUT
+            echo "ℹ️  Vercel secrets not configured, skipping deployment"
+          fi
+
+      - name: "Checkout"
+        if: steps.check-secrets.outputs.configured == 'true'
+        uses: actions/checkout@v4
+
+      - name: "Setup Node.js"
+        if: steps.check-secrets.outputs.configured == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: "Configure npm authentication"
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: |
+          if [ -n "${{ secrets.NPM_TOKEN }}" ]; then
+            echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
+            echo "@sudobility:registry=https://registry.npmjs.org/" >> ~/.npmrc
+          else
+            echo "ℹ️  No NPM_TOKEN provided, skipping authentication"
+          fi
+
+      - name: "Install dependencies"
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: |
+          # Workaround for Rollup optional dependencies issue
+          # https://github.com/npm/cli/issues/4828
+          if grep -q '"rollup"' package.json 2>/dev/null; then
+            echo "📦 Detected Rollup, using workaround for optional dependencies"
+            rm -rf node_modules package-lock.json
+            npm install
+          else
+            npm ci
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: "Run linting (non-blocking)"
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: npm run lint || echo "⚠️  Linting failed but continuing with deployment"
+
+      - name: "Build project"
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: npm run build
+        env:
+          VITE_REVENUECAT_API_KEY: ${{ secrets.VITE_REVENUECAT_API_KEY }}
+          VITE_WILDDUCK_API_TOKEN: ${{ secrets.VITE_WILDDUCK_API_TOKEN }}
+
+      - name: "Install Vercel CLI"
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: npm install --global vercel@latest
+
+      - name: "Pull Vercel Environment Information"
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      - name: "Deploy to Vercel"
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: |
+          DEPLOYMENT_URL=$(vercel deploy --prod --token=${{ secrets.VERCEL_TOKEN }})
+          echo "deployment-url=$DEPLOYMENT_URL" >> $GITHUB_OUTPUT
+          echo "🚀 Deployment URL: $DEPLOYMENT_URL"
+        id: vercel-deploy
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      - name: "Notify Vercel deployment success"
+        if: success() && steps.check-secrets.outputs.configured == 'true'
+        run: |
+          echo "▲ Deployed to Vercel successfully!"
+          echo "• Deployment URL: ${{ steps.vercel-deploy.outputs.deployment-url }}"
+          echo "• Project ID: ${{ secrets.VERCEL_PROJECT_ID }}"
+
+      - name: "Notify Vercel deployment failure"
+        if: failure() && steps.check-secrets.outputs.configured == 'true'
+        run: |
+          echo "❌ Vercel deployment FAILED for commit ${{ github.sha }}"
+          echo "Check: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
