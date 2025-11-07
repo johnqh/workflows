@@ -2,6 +2,8 @@
 # Example CI/CD workflow for Docker applications
 # Projects: mail_box_indexer, wildduck
 #
+# Automatically publishes to Docker Hub when DOCKERHUB_USERNAME and DOCKERHUB_TOKEN are configured
+# Automatically publishes to NPM when NPM_TOKEN is configured (for dual NPM+Docker projects)
 # Copy this file to your project's .github/workflows/ci-cd.yml
 
 name: CI/CD
@@ -23,8 +25,8 @@ jobs:
   cicd:
     uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
     with:
-      project-type: "docker-app"
       docker-image-name: "mail_box_indexer"  # Change to your Docker image name
+      npm-access: "restricted"  # Only used if NPM_TOKEN is configured
     secrets:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}

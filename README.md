@@ -6,15 +6,17 @@ This repository contains reusable GitHub Actions workflows for the 0xmail.box ec
 
 The unified CI/CD workflow provides:
 - ✅ **Automated testing** with Node.js 22.x
-- 📦 **NPM publishing** for library projects
-- 🐳 **Docker deployment** for containerized applications
-- ☁️ **Cloudflare Pages deployment** for web applications
+- 📦 **NPM publishing** - automatically triggered when `NPM_TOKEN` is configured
+- 🐳 **Docker deployment** - automatically triggered when Docker Hub secrets are configured
+- ☁️ **Cloudflare Pages deployment** - automatically triggered when Cloudflare secrets are configured
 - 🔒 **Security checks** and linting
 - 🏷️ **Automated GitHub releases**
 
+**Key Feature**: The workflow automatically detects which deployment targets to use based on configured secrets. No need to specify a project type!
+
 ## Usage
 
-### For Library Projects
+### For Library Projects (NPM Only)
 
 Create `.github/workflows/ci-cd.yml` in your project:
 
@@ -31,10 +33,53 @@ jobs:
   cicd:
     uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
     with:
-      project-type: "library"
       npm-access: "restricted"  # or "public"
     secrets:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+```
+
+### For Docker Applications (Docker Only)
+
+```yaml
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  cicd:
+    uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
+    with:
+      docker-image-name: "mail_box_indexer"  # optional, defaults to repo name
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+```
+
+### For NPM + Docker (e.g., wildduck)
+
+```yaml
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  cicd:
+    uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
+    with:
+      docker-image-name: "wildduck"
+      npm-access: "restricted"
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
 ```
 
 ### For Web Applications (Cloudflare Pages)
@@ -52,7 +97,6 @@ jobs:
   cicd:
     uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
     with:
-      project-type: "webapp"
       cloudflare-project-name: "0xmail-box"  # optional, defaults to repo name
     secrets:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -62,78 +106,65 @@ jobs:
       VITE_WILDDUCK_API_TOKEN: ${{ secrets.VITE_WILDDUCK_API_TOKEN }}
 ```
 
-### For Docker Applications
-
-```yaml
-name: CI/CD
-
-on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
-
-jobs:
-  cicd:
-    uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
-    with:
-      project-type: "docker-app"
-      docker-image-name: "mail_box_indexer"  # optional, defaults to repo name
-    secrets:
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-```
-
 ## Configuration Options
 
 ### Inputs
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `project-type` | string | ✅ Yes | - | Project type: `library`, `webapp`, or `docker-app` |
-| `npm-access` | string | No | `restricted` | NPM package access: `public` or `restricted` |
+| `npm-access` | string | No | `restricted` | NPM package access: `public` or `restricted` (only used if `NPM_TOKEN` is set) |
 | `node-version` | string | No | `22.x` | Node.js version to use |
-| `cloudflare-project-name` | string | No | repo name | Cloudflare Pages project name |
-| `docker-image-name` | string | No | repo name | Docker image name |
+| `cloudflare-project-name` | string | No | repo name | Cloudflare Pages project name (only used if Cloudflare secrets are set) |
+| `docker-image-name` | string | No | repo name | Docker image name (only used if Docker Hub secrets are set) |
 
 ### Secrets
 
-| Secret | Required For | Description |
-|--------|--------------|-------------|
-| `NPM_TOKEN` | All projects with npm dependencies | NPM authentication token |
-| `DOCKERHUB_USERNAME` | Docker apps | Docker Hub username |
-| `DOCKERHUB_TOKEN` | Docker apps | Docker Hub access token |
-| `CLOUDFLARE_API_TOKEN` | Web apps | Cloudflare API token |
-| `CLOUDFLARE_ACCOUNT_ID` | Web apps | Cloudflare account ID |
-| `VITE_REVENUECAT_API_KEY` | Web apps (optional) | RevenueCat API key for build |
-| `VITE_WILDDUCK_API_TOKEN` | Web apps (optional) | WildDuck API token for build |
+The workflow automatically detects which deployment targets to use based on configured secrets:
 
-## Project Types
+| Secret | Triggers | Description |
+|--------|----------|-------------|
+| `NPM_TOKEN` | 📦 NPM publishing | NPM authentication token. When set, publishes package to NPM on version changes. |
+| `DOCKERHUB_USERNAME` + `DOCKERHUB_TOKEN` | 🐳 Docker deployment | Docker Hub credentials. When both are set, builds and pushes Docker images. |
+| `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | ☁️ Cloudflare Pages | Cloudflare credentials. When both are set, deploys to Cloudflare Pages. |
+| `RAILWAY_TOKEN` + `RAILWAY_SERVICE` | 🚂 Railway deployment | Railway credentials. When both are set, deploys to Railway. |
+| `VERCEL_TOKEN` + `VERCEL_ORG_ID` + `VERCEL_PROJECT_ID` | ▲ Vercel deployment | Vercel credentials. When all three are set, deploys to Vercel. |
+| `VITE_REVENUECAT_API_KEY` | Build env var | RevenueCat API key for build (optional) |
+| `VITE_WILDDUCK_API_TOKEN` | Build env var | WildDuck API token for build (optional) |
 
-### Library (`project-type: "library"`)
+## How It Works
 
-Behavior:
-- ✅ Runs tests, linting, type checking
-- ✅ Builds the project
+The workflow intelligently detects what to deploy based on configured secrets:
+
+### All Projects
+
+Always runs:
+- ✅ Tests, linting, type checking
+- ✅ Build verification
+
+### When NPM_TOKEN is set
+
+Automatically runs:
 - 📦 Publishes to NPM (if version changed)
-- 🏷️ Creates GitHub release (if version changed)
-- 🐳 **Optional**: Deploys to Docker (if secrets provided)
+- 🏷️ Creates GitHub release with tag
 
-### Web App (`project-type: "webapp"`)
+### When Docker Hub secrets are set
 
-Behavior:
-- ✅ Runs tests, linting, type checking
-- ✅ Builds the project
-- ☁️ Deploys to Cloudflare Pages (main branch only)
-- 🐳 **Optional**: Deploys to Docker (if secrets provided)
+Automatically runs:
+- 🐳 Builds multi-arch Docker images (arm64, amd64)
+- 🐳 Pushes to Docker Hub with `latest` and version tags
 
-### Docker App (`project-type: "docker-app"`)
+### When Cloudflare secrets are set
 
-Behavior:
-- ✅ Runs tests, linting, type checking
-- ✅ Builds the project
-- 🐳 Deploys to Docker Hub (if secrets provided)
+Automatically runs:
+- ☁️ Deploys to Cloudflare Pages
+- ☁️ Supports custom project names
+
+### Multiple Targets
+
+You can deploy to multiple targets simultaneously! For example:
+- NPM + Docker Hub (like wildduck)
+- Cloudflare Pages + Docker Hub
+- All three targets at once
 
 ## NPM Package Access
 
@@ -143,17 +174,15 @@ Use `npm-access: "public"` for open-source libraries:
 
 ```yaml
 with:
-  project-type: "library"
   npm-access: "public"
 ```
 
 ### Restricted Packages (Default)
 
-Use `npm-access: "restricted"` for private @sudobility packages:
+Use `npm-access: "restricted"` for private packages:
 
 ```yaml
 with:
-  project-type: "library"
   npm-access: "restricted"
 ```
 
@@ -176,19 +205,19 @@ The workflow automatically:
 
 ## Docker Deployment
 
-Docker deployment is **conditional** and only runs when:
+Docker deployment automatically runs when:
 - `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets are set
 - Project has a `Dockerfile`
 
 Features:
 - Multi-architecture builds (arm64, amd64)
-- Tags: `latest` and version tag (e.g., `v1.2.3`)
+- Tags: `latest` and version tag (e.g., `v8.0.0`)
 - Passes `NPM_TOKEN` as build arg for private dependencies
+- Works alongside NPM publishing (no conflicts)
 
 ## Cloudflare Pages Deployment
 
-Cloudflare deployment is **conditional** and only runs when:
-- `project-type` is `webapp`
+Cloudflare deployment automatically runs when:
 - `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets are set
 - Push is to `main` branch
 
@@ -215,24 +244,36 @@ Your project should have these npm scripts:
 
 ## Examples by Project
 
-### design_system
+### design_system (Public Library)
 ```yaml
 with:
-  project-type: "library"
   npm-access: "public"
+secrets:
+  NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
 
-### di, types
+### di, types (Restricted Library)
 ```yaml
 with:
-  project-type: "library"
   npm-access: "restricted"
+secrets:
+  NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+```
+
+### wildduck (NPM + Docker)
+```yaml
+with:
+  docker-image-name: "wildduck"
+  npm-access: "restricted"
+secrets:
+  NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+  DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
 ```
 
 ### mail_box (Web App)
 ```yaml
 with:
-  project-type: "webapp"
   cloudflare-project-name: "0xmail-box"
 secrets:
   CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -242,7 +283,7 @@ secrets:
 ### mail_box_indexer (Docker App)
 ```yaml
 with:
-  project-type: "docker-app"
+  docker-image-name: "mail_box_indexer"
 secrets:
   DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
   DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}

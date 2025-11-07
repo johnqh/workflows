@@ -27,8 +27,9 @@ workflows/
 ✅ **Single Source of Truth** - One workflow definition, used by all projects
 ✅ **Easy Maintenance** - Update once, applies everywhere
 ✅ **Consistent Behavior** - All projects follow the same CI/CD patterns
-✅ **Conditional Deployment** - Only deploys when secrets are configured
-✅ **Type-Safe Configuration** - Clear inputs for each project type
+✅ **Automatic Detection** - Detects deployment targets based on configured secrets
+✅ **Multi-Target Support** - Deploy to multiple destinations simultaneously (NPM + Docker, etc.)
+✅ **No Project Type Required** - Workflow intelligently adapts to your project
 
 ## Workflow Features
 
@@ -39,21 +40,22 @@ workflows/
 - ✅ Automated tests
 - ✅ Production builds
 
-### Library Projects (`project-type: "library"`)
+### NPM Publishing (when NPM_TOKEN is set)
 - 📦 NPM publishing (public or restricted)
 - 🏷️ Automated GitHub releases
 - 🔄 Version change detection
-- 🐳 Optional Docker deployment
+- Works alongside Docker deployment
 
-### Web Applications (`project-type: "webapp"`)
-- ☁️ Cloudflare Pages deployment
-- 🌍 Production builds with environment variables
-- 🐳 Optional Docker deployment
-
-### Docker Applications (`project-type: "docker-app"`)
+### Docker Deployment (when Docker Hub secrets are set)
 - 🐳 Multi-architecture Docker builds (arm64, amd64)
 - 🏷️ Version tagging (latest + semver)
 - 📦 Docker Hub publishing
+- Works alongside NPM publishing
+
+### Cloudflare Pages (when Cloudflare secrets are set)
+- ☁️ Cloudflare Pages deployment
+- 🌍 Production builds with environment variables
+- Can also deploy to Docker Hub simultaneously
 
 ## How It Works
 
@@ -70,36 +72,40 @@ jobs:
   cicd:
     uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
     with:
-      project-type: "library"
-      npm-access: "restricted"
+      npm-access: "restricted"  # Only needed if publishing to NPM
+      docker-image-name: "wildduck"  # Only needed if deploying to Docker
     secrets:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
 ```
 
-### 3. Conditional Execution
+### 3. Automatic Detection
 
 Jobs execute based on:
-- **Project type** (library, webapp, docker-app)
-- **Available secrets** (NPM_TOKEN, DOCKER_*, CLOUDFLARE_*)
+- **Available secrets** - Workflow detects what to deploy based on configured secrets
+  - NPM_TOKEN → NPM publishing
+  - DOCKERHUB_USERNAME + DOCKERHUB_TOKEN → Docker Hub deployment
+  - CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID → Cloudflare Pages
 - **Version changes** (for NPM publishing)
 - **Branch** (main vs PR)
 
 ## Project Mapping
 
-| Project | Type | NPM Access | Deployment |
-|---------|------|------------|------------|
-| design_system | Library | public | NPM |
-| di | Library | restricted | NPM |
-| mail_box | Web App | - | Cloudflare Pages |
-| mail_box_components | Library | restricted | NPM |
-| mail_box_configs | Library | restricted | NPM |
-| mail_box_contracts | Library | restricted | NPM |
-| mail_box_indexer | Docker App | - | Docker Hub |
-| mail_box_indexer_client | Library | restricted | NPM |
-| mail_box_lib | Library | restricted | NPM |
-| types | Library | restricted | NPM |
-| wildduck | Docker App | - | Docker Hub |
-| wildduck_client | Library | restricted | NPM |
+| Project | NPM Access | Deployment Targets |
+|---------|------------|-------------------|
+| design_system | public | NPM |
+| di | restricted | NPM |
+| mail_box | - | Cloudflare Pages |
+| mail_box_components | restricted | NPM |
+| mail_box_configs | restricted | NPM |
+| mail_box_contracts | restricted | NPM |
+| mail_box_indexer | - | Docker Hub |
+| mail_box_indexer_client | restricted | NPM |
+| mail_box_lib | restricted | NPM |
+| types | restricted | NPM |
+| **wildduck** | **restricted** | **NPM + Docker Hub** |
+| wildduck_client | restricted | NPM |
 
 ## Quick Start
 
@@ -134,21 +140,34 @@ git push origin main
 ### Public Library (design_system)
 ```yaml
 with:
-  project-type: "library"
   npm-access: "public"
+secrets:
+  NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
 
 ### Private Library (di, types, etc.)
 ```yaml
 with:
-  project-type: "library"
   npm-access: "restricted"
+secrets:
+  NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+```
+
+### NPM + Docker (wildduck)
+```yaml
+with:
+  docker-image-name: "wildduck"
+  npm-access: "restricted"
+secrets:
+  NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+  DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
 ```
 
 ### Web Application (mail_box)
 ```yaml
 with:
-  project-type: "webapp"
+  cloudflare-project-name: "0xmail-box"
 secrets:
   CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
   CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -157,7 +176,7 @@ secrets:
 ### Docker Application (mail_box_indexer)
 ```yaml
 with:
-  project-type: "docker-app"
+  docker-image-name: "mail_box_indexer"
 secrets:
   DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
   DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -165,21 +184,24 @@ secrets:
 
 ## Required Secrets
 
-### All Projects
-- `NPM_TOKEN` - For installing private @sudobility packages
+The workflow automatically detects what to deploy based on which secrets are configured:
 
-### Library Projects (additionally)
-- `NPM_TOKEN` - For publishing to npm
+### For NPM Publishing
+- `NPM_TOKEN` - NPM authentication token (triggers NPM publishing when set)
 
-### Web Applications (additionally)
-- `CLOUDFLARE_API_TOKEN` - For Cloudflare Pages deployment
-- `CLOUDFLARE_ACCOUNT_ID` - Cloudflare account ID
-- `VITE_REVENUECAT_API_KEY` - (optional) Build-time environment variable
-- `VITE_WILDDUCK_API_TOKEN` - (optional) Build-time environment variable
-
-### Docker Applications (additionally)
+### For Docker Hub Deployment
 - `DOCKERHUB_USERNAME` - Docker Hub username
 - `DOCKERHUB_TOKEN` - Docker Hub access token
+- Both required to trigger Docker deployment
+
+### For Cloudflare Pages Deployment
+- `CLOUDFLARE_API_TOKEN` - For Cloudflare Pages deployment
+- `CLOUDFLARE_ACCOUNT_ID` - Cloudflare account ID
+- Both required to trigger Cloudflare deployment
+
+### Optional Build Environment Variables
+- `VITE_REVENUECAT_API_KEY` - RevenueCat API key for build
+- `VITE_WILDDUCK_API_TOKEN` - WildDuck API token for build
 
 ## Maintenance
 
