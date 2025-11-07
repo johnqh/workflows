@@ -122,8 +122,11 @@ jobs:
           if grep -q '"build:ci"' package.json 2>/dev/null; then
             echo "📦 Using build:ci script"
             npm run build:ci
-          else
+          elif grep -q '"build"' package.json 2>/dev/null; then
+            echo "📦 Using build script"
             npm run build
+          else
+            echo "ℹ️  No build script found, skipping build step"
           fi
 
   check_for_release:
@@ -265,8 +268,11 @@ jobs:
           if grep -q '"build:ci"' package.json 2>/dev/null; then
             echo "📦 Using build:ci script"
             npm run build:ci
-          else
+          elif grep -q '"build"' package.json 2>/dev/null; then
+            echo "📦 Using build script"
             npm run build
+          else
+            echo "ℹ️  No build script found, skipping build step"
           fi
 
       - name: "Create GitHub Release"
