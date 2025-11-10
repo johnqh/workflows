@@ -114,6 +114,7 @@ jobs:
 |-------|------|----------|---------|-------------|
 | `npm-access` | string | No | `restricted` | NPM package access: `public` or `restricted` (only used if `NPM_TOKEN` is set) |
 | `skip-npm-publish` | boolean | No | `false` | Skip NPM publishing even if `NPM_TOKEN` is configured (useful for apps that need `NPM_TOKEN` only for private dependencies) |
+| `notification-email` | string | No | `""` | Email address to notify on test failures (only used for `develop` branch) |
 | `node-version` | string | No | `22.x` | Node.js version to use |
 | `cloudflare-project-name` | string | No | repo name | Cloudflare Pages project name (only used if Cloudflare secrets are set) |
 | `docker-image-name` | string | No | repo name | Docker image name (only used if Docker Hub secrets are set) |
@@ -129,6 +130,8 @@ The workflow automatically detects which deployment targets to use based on conf
 | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | ☁️ Cloudflare Pages | Cloudflare credentials. When both are set, deploys to Cloudflare Pages. |
 | `RAILWAY_TOKEN` + `RAILWAY_SERVICE` | 🚂 Railway deployment | Railway credentials. When both are set, deploys to Railway. |
 | `VERCEL_TOKEN` + `VERCEL_ORG_ID` + `VERCEL_PROJECT_ID` | ▲ Vercel deployment | Vercel credentials. When all three are set, deploys to Vercel. |
+| `SMTP_HOST` + `SMTP_USERNAME` + `SMTP_PASSWORD` | 📧 Email notifications | SMTP server credentials. When set with `notification-email` input, sends email on test failures (develop branch only). |
+| `SMTP_PORT` | Email config | SMTP server port (optional, defaults to 587) |
 | `VITE_REVENUECAT_API_KEY` | Build env var | RevenueCat API key for build (optional) |
 | `VITE_WILDDUCK_API_TOKEN` | Build env var | WildDuck API token for build (optional) |
 
@@ -224,6 +227,55 @@ The workflow automatically:
 2. Compares with published version on NPM
 3. Only publishes if version has changed
 4. Creates GitHub release with tag `vX.Y.Z`
+
+## Develop Branch Support
+
+The workflow supports a `develop` branch for CI testing without deployments:
+
+### Behavior on `develop` Branch
+
+- ✅ Runs all tests (lint, type-check, unit tests, build)
+- ❌ Skips all deployments (NPM, Docker, Cloudflare, Railway, Vercel)
+- ❌ Skips GitHub release creation
+- 📧 Sends email notification on test failure (if configured)
+
+### Email Notifications for Test Failures
+
+Configure email notifications for `develop` branch test failures:
+
+```yaml
+on:
+  push:
+    branches:
+      - main
+      - develop  # Add develop branch
+
+jobs:
+  cicd:
+    uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
+    with:
+      notification-email: ${{ vars.NOTIFICATION_EMAIL }}  # Set this variable in repo settings
+    secrets:
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}  # Optional, defaults to 587
+      SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+```
+
+**Setup:**
+1. Set `NOTIFICATION_EMAIL` variable in repository settings (Settings > Secrets and variables > Actions > Variables)
+2. Configure SMTP secrets in repository settings (Settings > Secrets and variables > Actions > Secrets):
+   - `SMTP_HOST`: Your SMTP server (e.g., `smtp.gmail.com`)
+   - `SMTP_USERNAME`: Your SMTP username/email
+   - `SMTP_PASSWORD`: Your SMTP password or app-specific password
+   - `SMTP_PORT`: (Optional) SMTP port, defaults to 587
+
+**Email Content:**
+When tests fail on `develop` branch, the notification includes:
+- Repository name
+- Branch name
+- Commit SHA and author
+- Direct link to the failed workflow run
 
 ## Docker Deployment
 

@@ -24,6 +24,10 @@ on:
         description: "Docker image name (defaults to repo name, only used if Docker Hub secrets are set)"
         type: string
         default: ""
+      notification-email:
+        description: "Email address to notify on test failures (only used for develop branch)"
+        type: string
+        default: ""
     secrets:
       NPM_TOKEN:
         description: "NPM authentication token for publishing and installing private packages"
@@ -60,6 +64,18 @@ on:
         required: false
       VITE_WILDDUCK_API_TOKEN:
         description: "WildDuck API token for build"
+        required: false
+      SMTP_HOST:
+        description: "SMTP server host for email notifications"
+        required: false
+      SMTP_PORT:
+        description: "SMTP server port for email notifications"
+        required: false
+      SMTP_USERNAME:
+        description: "SMTP username for email notifications"
+        required: false
+      SMTP_PASSWORD:
+        description: "SMTP password for email notifications"
         required: false
 
 jobs:
@@ -143,6 +159,7 @@ jobs:
       has_package_json: ${{ steps.check.outputs.has_package_json }}
       version_changed: ${{ steps.check.outputs.version_changed }}
       package_name: ${{ steps.check.outputs.package_name }}
+      is_develop_branch: ${{ steps.check.outputs.is_develop_branch }}
     steps:
       - name: "Checkout"
         uses: actions/checkout@v4
@@ -158,6 +175,20 @@ jobs:
       - name: "Check if should trigger release"
         id: check
         run: |
+          # Check if we're on develop branch
+          BRANCH_NAME="${{ github.ref_name }}"
+          echo "Branch: $BRANCH_NAME"
+
+          if [[ "$BRANCH_NAME" == "develop" ]]; then
+            echo "is_develop_branch=true" >> $GITHUB_OUTPUT
+            echo "should_release=false" >> $GITHUB_OUTPUT
+            echo "version_changed=false" >> $GITHUB_OUTPUT
+            echo "ℹ️  Develop branch detected - running tests only, skipping all deployments"
+            exit 0
+          else
+            echo "is_develop_branch=false" >> $GITHUB_OUTPUT
+          fi
+
           # Check if package.json exists (library project)
           if [ -f "package.json" ]; then
             echo "has_package_json=true" >> $GITHUB_OUTPUT
@@ -668,3 +699,54 @@ jobs:
         run: |
           echo "❌ Vercel deployment FAILED for commit ${{ github.sha }}"
           echo "Check: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+  notify_failure:
+    name: "Notify Test Failure"
+    needs:
+      - test
+      - check_for_release
+    if: |
+      always() &&
+      needs.test.result == 'failure' &&
+      needs.check_for_release.outputs.is_develop_branch == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Check if email notification is configured"
+        id: check-email
+        run: |
+          if [ -n "${{ inputs.notification-email }}" ] && [ -n "${{ secrets.SMTP_HOST }}" ] && [ -n "${{ secrets.SMTP_USERNAME }}" ] && [ -n "${{ secrets.SMTP_PASSWORD }}" ]; then
+            echo "configured=true" >> $GITHUB_OUTPUT
+            echo "✅ Email notification is configured"
+          else
+            echo "configured=false" >> $GITHUB_OUTPUT
+            echo "ℹ️  Email notification not fully configured, skipping"
+            exit 0
+          fi
+
+      - name: "Send failure notification email"
+        if: steps.check-email.outputs.configured == 'true'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port: ${{ secrets.SMTP_PORT || '587' }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "❌ Test Failure: ${{ github.repository }} (develop branch)"
+          to: ${{ inputs.notification-email }}
+          from: ${{ secrets.SMTP_USERNAME }}
+          body: |
+            Test suite failed on develop branch for ${{ github.repository }}
+
+            📋 Details:
+            • Repository: ${{ github.repository }}
+            • Branch: ${{ github.ref_name }}
+            • Commit: ${{ github.sha }}
+            • Author: ${{ github.actor }}
+            • Workflow Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Please check the workflow logs for details.
+
+      - name: "Log notification sent"
+        if: steps.check-email.outputs.configured == 'true'
+        run: |
+          echo "📧 Failure notification sent to ${{ inputs.notification-email }}"

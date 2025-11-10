@@ -2,8 +2,8 @@
 # Example CI/CD workflow for Docker applications
 # Projects: mail_box_indexer, wildduck
 #
-# Automatically publishes to Docker Hub when DOCKERHUB_USERNAME and DOCKERHUB_TOKEN are configured
-# Use skip-npm-publish: true if you need NPM_TOKEN only for installing private dependencies
+# - main branch: Runs tests and deploys to Docker Hub
+# - develop branch: Runs tests only, sends email on failure
 # Copy this file to your project's .github/workflows/ci-cd.yml
 
 name: CI/CD
@@ -12,9 +12,11 @@ on:
   push:
     branches:
       - main
+      - develop  # Add develop branch for CI-only testing
   pull_request:
     branches:
       - main
+      - develop
 
 permissions:
   contents: write      # For creating GitHub releases
@@ -27,7 +29,13 @@ jobs:
     with:
       docker-image-name: "mail_box_indexer"  # Change to your Docker image name
       skip-npm-publish: true  # Set to true if this is an app, not an NPM library
+      notification-email: ${{ vars.NOTIFICATION_EMAIL }}  # Email for develop branch failures
     secrets:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}  # Used for installing private dependencies
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      # SMTP secrets for email notifications (optional, for develop branch failures)
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
