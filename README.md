@@ -113,6 +113,7 @@ jobs:
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `npm-access` | string | No | `restricted` | NPM package access: `public` or `restricted` (only used if `NPM_TOKEN` is set) |
+| `skip-npm-publish` | boolean | No | `false` | Skip NPM publishing even if `NPM_TOKEN` is configured (useful for apps that need `NPM_TOKEN` only for private dependencies) |
 | `node-version` | string | No | `22.x` | Node.js version to use |
 | `cloudflare-project-name` | string | No | repo name | Cloudflare Pages project name (only used if Cloudflare secrets are set) |
 | `docker-image-name` | string | No | repo name | Docker image name (only used if Docker Hub secrets are set) |
@@ -185,6 +186,27 @@ Use `npm-access: "restricted"` for private packages:
 with:
   npm-access: "restricted"
 ```
+
+### Skip NPM Publishing (Apps Only)
+
+For applications (Docker apps, web apps) that need `NPM_TOKEN` only for installing private dependencies but shouldn't publish to NPM:
+
+```yaml
+with:
+  skip-npm-publish: true  # This is an app, not an NPM library
+secrets:
+  NPM_TOKEN: ${{ secrets.NPM_TOKEN }}  # Used for installing @sudobility/* packages
+```
+
+**Use cases:**
+- Bun/Ponder applications like `mail_box_indexer`
+- Docker applications that consume NPM packages but aren't libraries
+- Web applications that use private dependencies but deploy to Cloudflare/Vercel
+
+**Note:** If `skip-npm-publish: true` is set, the workflow will:
+- Still use `NPM_TOKEN` to install private dependencies during build/test
+- Skip creating GitHub releases
+- Skip publishing to NPM
 
 ## Release Behavior
 

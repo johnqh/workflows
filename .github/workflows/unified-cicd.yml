@@ -12,6 +12,10 @@ on:
         description: "NPM package access level: public or restricted (only used if NPM_TOKEN is set)"
         type: string
         default: "restricted"
+      skip-npm-publish:
+        description: "Skip NPM publishing even if NPM_TOKEN is configured (useful for apps that need NPM_TOKEN only for private dependencies)"
+        type: boolean
+        default: false
       cloudflare-project-name:
         description: "Cloudflare Pages project name (defaults to repo name, only used if Cloudflare secrets are set)"
         type: string
@@ -216,7 +220,8 @@ jobs:
     if: |
       needs.check_for_release.outputs.should_release == 'true' &&
       needs.check_for_release.outputs.has_package_json == 'true' &&
-      needs.check_for_release.outputs.version_changed == 'true'
+      needs.check_for_release.outputs.version_changed == 'true' &&
+      inputs.skip-npm-publish != true
     runs-on: ubuntu-latest
     permissions:
       contents: write

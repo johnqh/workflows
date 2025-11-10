@@ -3,7 +3,7 @@
 # Projects: mail_box_indexer, wildduck
 #
 # Automatically publishes to Docker Hub when DOCKERHUB_USERNAME and DOCKERHUB_TOKEN are configured
-# Automatically publishes to NPM when NPM_TOKEN is configured (for dual NPM+Docker projects)
+# Use skip-npm-publish: true if you need NPM_TOKEN only for installing private dependencies
 # Copy this file to your project's .github/workflows/ci-cd.yml
 
 name: CI/CD
@@ -26,8 +26,8 @@ jobs:
     uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
     with:
       docker-image-name: "mail_box_indexer"  # Change to your Docker image name
-      npm-access: "restricted"  # Only used if NPM_TOKEN is configured
+      skip-npm-publish: true  # Set to true if this is an app, not an NPM library
     secrets:
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}  # Used for installing private dependencies
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
