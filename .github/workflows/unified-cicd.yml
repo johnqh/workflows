@@ -59,12 +59,6 @@ on:
       VERCEL_PROJECT_ID:
         description: "Vercel project ID"
         required: false
-      VITE_REVENUECAT_API_KEY:
-        description: "RevenueCat API key for build"
-        required: false
-      VITE_WILDDUCK_API_TOKEN:
-        description: "WildDuck API token for build"
-        required: false
       SMTP_HOST:
         description: "SMTP server host for email notifications"
         required: false
@@ -497,10 +491,12 @@ jobs:
 
       - name: "Build project"
         if: steps.check-secrets.outputs.configured == 'true'
-        run: npm run build
-        env:
-          VITE_REVENUECAT_API_KEY: ${{ secrets.VITE_REVENUECAT_API_KEY }}
-          VITE_WILDDUCK_API_TOKEN: ${{ secrets.VITE_WILDDUCK_API_TOKEN }}
+        run: |
+          # Pass all secrets as environment variables to the build
+          # Infrastructure tokens (NPM_TOKEN, CLOUDFLARE_*, etc.) won't affect the build
+          # Only build-time variables (VITE_*, REACT_APP_*, etc.) will be used
+          export $(echo '${{ toJSON(secrets) }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' | grep -E '^(VITE_|REACT_APP_|NEXT_PUBLIC_|BUILD_)' || true)
+          npm run build
 
       - name: "Determine project name"
         if: steps.check-secrets.outputs.configured == 'true'
@@ -660,10 +656,12 @@ jobs:
 
       - name: "Build project"
         if: steps.check-secrets.outputs.configured == 'true'
-        run: npm run build
-        env:
-          VITE_REVENUECAT_API_KEY: ${{ secrets.VITE_REVENUECAT_API_KEY }}
-          VITE_WILDDUCK_API_TOKEN: ${{ secrets.VITE_WILDDUCK_API_TOKEN }}
+        run: |
+          # Pass all secrets as environment variables to the build
+          # Infrastructure tokens (NPM_TOKEN, CLOUDFLARE_*, etc.) won't affect the build
+          # Only build-time variables (VITE_*, REACT_APP_*, etc.) will be used
+          export $(echo '${{ toJSON(secrets) }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' | grep -E '^(VITE_|REACT_APP_|NEXT_PUBLIC_|BUILD_)' || true)
+          npm run build
 
       - name: "Install Vercel CLI"
         if: steps.check-secrets.outputs.configured == 'true'

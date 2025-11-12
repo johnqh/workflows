@@ -98,12 +98,7 @@ jobs:
     uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
     with:
       cloudflare-project-name: "0xmail-box"  # optional, defaults to repo name
-    secrets:
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      VITE_REVENUECAT_API_KEY: ${{ secrets.VITE_REVENUECAT_API_KEY }}
-      VITE_WILDDUCK_API_TOKEN: ${{ secrets.VITE_WILDDUCK_API_TOKEN }}
+    secrets: inherit  # Pass all repository secrets to the workflow
 ```
 
 ## Configuration Options
@@ -132,8 +127,7 @@ The workflow automatically detects which deployment targets to use based on conf
 | `VERCEL_TOKEN` + `VERCEL_ORG_ID` + `VERCEL_PROJECT_ID` | ▲ Vercel deployment | Vercel credentials. When all three are set, deploys to Vercel. |
 | `SMTP_HOST` + `SMTP_USERNAME` + `SMTP_PASSWORD` | 📧 Email notifications | SMTP server credentials. When set with `notification-email` input, sends email on test failures (develop branch only). |
 | `SMTP_PORT` | Email config | SMTP server port (optional, defaults to 587) |
-| `VITE_REVENUECAT_API_KEY` | Build env var | RevenueCat API key for build (optional) |
-| `VITE_WILDDUCK_API_TOKEN` | Build env var | WildDuck API token for build (optional) |
+| `VITE_*`, `REACT_APP_*`, `NEXT_PUBLIC_*`, `BUILD_*` | 🏗️ Build env vars | Any secrets starting with these prefixes are automatically passed to build process |
 
 ## How It Works
 
@@ -143,7 +137,9 @@ The workflow intelligently detects what to deploy based on configured secrets:
 
 Always runs:
 - ✅ Tests, linting, type checking
-- ✅ Build verification
+- ✅ Build verification with automatic environment variable injection
+
+**Build Environment Variables**: The workflow automatically passes all secrets with common build prefixes (`VITE_*`, `REACT_APP_*`, `NEXT_PUBLIC_*`, `BUILD_*`) to the build process. This means you can add any build-time environment variables to your repository secrets and they'll be automatically available during the build without modifying the workflow file.
 
 ### When NPM_TOKEN is set
 

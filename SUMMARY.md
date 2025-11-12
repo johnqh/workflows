@@ -199,9 +199,15 @@ The workflow automatically detects what to deploy based on which secrets are con
 - `CLOUDFLARE_ACCOUNT_ID` - Cloudflare account ID
 - Both required to trigger Cloudflare deployment
 
-### Optional Build Environment Variables
-- `VITE_REVENUECAT_API_KEY` - RevenueCat API key for build
-- `VITE_WILDDUCK_API_TOKEN` - WildDuck API token for build
+### Build Environment Variables (Automatic)
+
+The workflow automatically detects and passes all secrets with these prefixes to the build process:
+- `VITE_*` - Vite environment variables
+- `REACT_APP_*` - Create React App environment variables
+- `NEXT_PUBLIC_*` - Next.js public environment variables
+- `BUILD_*` - Generic build environment variables
+
+**No workflow changes needed** - just add your build-time secrets to the repository with the appropriate prefix!
 
 ## Maintenance
 

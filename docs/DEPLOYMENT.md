@@ -267,37 +267,50 @@ Deploy frontend applications and serverless functions to Vercel.
 
 ## Build Environment Variables
 
-Some projects may require environment variables during the build process. The workflow supports the following build-time secrets:
+The workflow **automatically detects and passes** build-time environment variables to the build process based on common naming conventions.
 
-| Secret Name | Description | Used By |
-|------------|-------------|---------|
-| `VITE_REVENUECAT_API_KEY` | RevenueCat API key for Vite apps | Vite builds |
-| `VITE_WILDDUCK_API_TOKEN` | WildDuck API token for Vite apps | Vite builds |
+### Supported Prefixes
+
+The following secret prefixes are automatically passed to builds:
+
+| Prefix | Framework | Example |
+|--------|-----------|---------|
+| `VITE_*` | Vite | `VITE_REVENUECAT_API_KEY`, `VITE_API_URL` |
+| `REACT_APP_*` | Create React App | `REACT_APP_API_KEY`, `REACT_APP_ENV` |
+| `NEXT_PUBLIC_*` | Next.js | `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_GA_ID` |
+| `BUILD_*` | Generic | `BUILD_VERSION`, `BUILD_TIMESTAMP` |
 
 ### How to Add Build Environment Variables
 
-1. Add the secret to your repository (same process as above)
-2. The workflow automatically passes these to the build process
-3. In your code, access them as usual:
+1. **Add secret to repository** (Settings → Secrets and variables → Actions)
+2. **Name it with the correct prefix** (e.g., `VITE_API_KEY`)
+3. **No workflow changes needed** - it's automatically available during build!
+
+### Example Usage
+
+In your code, access them as usual:
    ```javascript
+   // Vite
    const apiKey = import.meta.env.VITE_REVENUECAT_API_KEY
+
+   // Create React App
+   const apiKey = process.env.REACT_APP_API_KEY
+
+   // Next.js
+   const apiUrl = process.env.NEXT_PUBLIC_API_URL
    ```
 
-### Adding Custom Environment Variables
+### Using Non-Standard Prefixes
 
-If you need additional environment variables:
+If you need environment variables with different prefixes (not `VITE_`, `REACT_APP_`, `NEXT_PUBLIC_`, or `BUILD_`), you have two options:
 
-1. Add them to your repository secrets
-2. Edit the workflow file `unified-cicd.yml`
-3. Add them to the `Build project` step's `env` section:
-   ```yaml
-   - name: "Build project"
-     run: npm run build
-     env:
-       VITE_REVENUECAT_API_KEY: ${{ secrets.VITE_REVENUECAT_API_KEY }}
-       VITE_WILDDUCK_API_TOKEN: ${{ secrets.VITE_WILDDUCK_API_TOKEN }}
-       YOUR_CUSTOM_VAR: ${{ secrets.YOUR_CUSTOM_VAR }}  # Add here
-   ```
+**Option 1: Rename to use a supported prefix** (Recommended)
+```
+MY_API_KEY → VITE_API_KEY (then access as import.meta.env.VITE_API_KEY)
+```
+
+**Option 2: Use the `secrets: inherit` pattern** (Already the default)
+All secrets are already passed to the workflow via `secrets: inherit`. The workflow filters to supported prefixes for security. If you need all secrets available during build, you would need to modify the unified workflow's filter pattern.
 
 ---
 
