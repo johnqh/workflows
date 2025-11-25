@@ -135,7 +135,6 @@ jobs:
       version: ${{ steps.check.outputs.version }}
       version_tag: ${{ steps.check.outputs.version_tag }}
       has_package_json: ${{ steps.check.outputs.has_package_json }}
-      version_changed: ${{ steps.check.outputs.version_changed }}
       package_name: ${{ steps.check.outputs.package_name }}
       is_develop_branch: ${{ steps.check.outputs.is_develop_branch }}
     steps:
@@ -148,7 +147,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22.x"
-          registry-url: "https://registry.npmjs.org"
 
       - name: "Check if should trigger release"
         id: check
@@ -160,7 +158,6 @@ jobs:
           if [[ "$BRANCH_NAME" == "develop" ]]; then
             echo "is_develop_branch=true" >> $GITHUB_OUTPUT
             echo "should_release=false" >> $GITHUB_OUTPUT
-            echo "version_changed=false" >> $GITHUB_OUTPUT
             echo "ℹ️  Develop branch detected - running tests only, skipping all deployments"
             exit 0
           else
@@ -173,7 +170,6 @@ jobs:
           else
             echo "has_package_json=false" >> $GITHUB_OUTPUT
             echo "should_release=false" >> $GITHUB_OUTPUT
-            echo "version_changed=false" >> $GITHUB_OUTPUT
             echo "ℹ️  No package.json found, skipping release"
             exit 0
           fi
@@ -185,7 +181,6 @@ jobs:
           # Skip release only for PR events that weren't merged
           if [[ "${{ github.event_name }}" == "pull_request" ]] && [[ "${{ github.event.action }}" != "closed" || "${{ github.event.pull_request.merged }}" != "true" ]]; then
             echo "should_release=false" >> $GITHUB_OUTPUT
-            echo "version_changed=false" >> $GITHUB_OUTPUT
             echo "ℹ️  PR not merged, skipping release"
             exit 0
           fi
@@ -193,7 +188,6 @@ jobs:
           # Skip only if explicitly marked to skip CI
           if [[ "$COMMIT_MSG" == *"[skip ci]"* ]] || [[ "$COMMIT_MSG" == *"[skip-ci]"* ]]; then
             echo "should_release=false" >> $GITHUB_OUTPUT
-            echo "version_changed=false" >> $GITHUB_OUTPUT
             echo "ℹ️  Commit marked to skip CI: $COMMIT_MSG"
             exit 0
           fi
@@ -205,21 +199,10 @@ jobs:
           echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
           echo "version_tag=v$CURRENT_VERSION" >> $GITHUB_OUTPUT
           echo "package_name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
+          echo "should_release=true" >> $GITHUB_OUTPUT
 
-          # Check if version has changed by comparing with published NPM version
-          PUBLISHED_VERSION=$(npm view "$PACKAGE_NAME" version 2>/dev/null || echo "0.0.0")
-          echo "Published version: $PUBLISHED_VERSION"
-          echo "Current version: $CURRENT_VERSION"
-
-          if [ "$CURRENT_VERSION" != "$PUBLISHED_VERSION" ]; then
-            echo "version_changed=true" >> $GITHUB_OUTPUT
-            echo "should_release=true" >> $GITHUB_OUTPUT
-            echo "✅ Version changed: $PUBLISHED_VERSION → $CURRENT_VERSION"
-          else
-            echo "version_changed=false" >> $GITHUB_OUTPUT
-            echo "should_release=true" >> $GITHUB_OUTPUT
-            echo "ℹ️  Version unchanged: $CURRENT_VERSION - will run tests but skip publishing"
-          fi
+          echo "✅ Release checks passed for version $CURRENT_VERSION"
+          echo "ℹ️  Each deploy job will check its own registry for version existence"
 
   release_npm:
     name: "Release to NPM"
@@ -229,7 +212,6 @@ jobs:
     if: |
       needs.check_for_release.outputs.should_release == 'true' &&
       needs.check_for_release.outputs.has_package_json == 'true' &&
-      needs.check_for_release.outputs.version_changed == 'true' &&
       inputs.skip-npm-publish != true
     runs-on: ubuntu-latest
     permissions:
@@ -245,7 +227,6 @@ jobs:
           else
             echo "configured=false" >> $GITHUB_OUTPUT
             echo "ℹ️  NPM_TOKEN not configured, skipping NPM publishing"
-            exit 0
           fi
 
       - name: "Checkout"
@@ -259,24 +240,46 @@ jobs:
           node-version: ${{ inputs.node-version }}
           registry-url: "https://registry.npmjs.org"
 
-      - name: "Configure npm authentication"
+      - name: "Check if version already published to NPM"
         if: steps.check-secrets.outputs.configured == 'true'
+        id: check-npm-version
+        run: |
+          CURRENT_VERSION="${{ needs.check_for_release.outputs.version }}"
+          PACKAGE_NAME="${{ needs.check_for_release.outputs.package_name }}"
+
+          echo "Package: $PACKAGE_NAME"
+          echo "Current version: $CURRENT_VERSION"
+
+          # Get published version from NPM registry
+          PUBLISHED_VERSION=$(npm view "$PACKAGE_NAME" version 2>/dev/null || echo "0.0.0")
+          echo "Published version on NPM: $PUBLISHED_VERSION"
+
+          if [ "$CURRENT_VERSION" == "$PUBLISHED_VERSION" ]; then
+            echo "version_exists=true" >> $GITHUB_OUTPUT
+            echo "ℹ️  Version $CURRENT_VERSION already exists on NPM, skipping publish"
+          else
+            echo "version_exists=false" >> $GITHUB_OUTPUT
+            echo "✅ Version $CURRENT_VERSION not on NPM, will publish"
+          fi
+
+      - name: "Configure npm authentication"
+        if: steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true'
         run: |
           echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
           echo "@sudobility:registry=https://registry.npmjs.org/" >> ~/.npmrc
 
       - name: "Install dependencies"
-        if: steps.check-secrets.outputs.configured == 'true'
+        if: steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true'
         run: npm ci
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: "Run tests"
-        if: steps.check-secrets.outputs.configured == 'true'
+        if: steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true'
         run: npm test || echo "⚠️  No tests found"
 
       - name: "Build project"
-        if: steps.check-secrets.outputs.configured == 'true'
+        if: steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true'
         run: |
           # Use build:ci if available (e.g., for mail_box_contracts without cargo)
           if grep -q '"build:ci"' package.json 2>/dev/null; then
@@ -290,7 +293,7 @@ jobs:
           fi
 
       - name: "Create GitHub Release"
-        if: steps.check-secrets.outputs.configured == 'true'
+        if: steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.check_for_release.outputs.version_tag }}
@@ -300,7 +303,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Publish to NPM"
-        if: steps.check-secrets.outputs.configured == 'true'
+        if: steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true'
         run: |
           if [ "${{ inputs.npm-access }}" = "public" ]; then
             echo "📦 Publishing as public package"
@@ -313,7 +316,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: "Notify deployment success"
-        if: success() && steps.check-secrets.outputs.configured == 'true'
+        if: success() && steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true'
         run: |
           echo "🚀 Release ${{ needs.check_for_release.outputs.version }} deployed successfully!"
           echo "• NPM: https://www.npmjs.com/package/${{ needs.check_for_release.outputs.package_name }}/v/${{ needs.check_for_release.outputs.version }}"
@@ -342,31 +345,7 @@ jobs:
           else
             echo "configured=false" >> $GITHUB_OUTPUT
             echo "ℹ️  Docker Hub secrets not configured, skipping Docker deployment"
-            exit 0
           fi
-
-      - name: "Checkout"
-        if: steps.check-secrets.outputs.configured == 'true'
-        uses: actions/checkout@v4
-
-      - name: "Set up QEMU"
-        if: steps.check-secrets.outputs.configured == 'true'
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: "arm64,amd64"
-
-      - name: "Set up Docker Buildx"
-        if: steps.check-secrets.outputs.configured == 'true'
-        uses: docker/setup-buildx-action@v3
-        with:
-          platforms: linux/arm64,linux/amd64
-
-      - name: "Login to Docker Hub"
-        if: steps.check-secrets.outputs.configured == 'true'
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: "Determine image name"
         if: steps.check-secrets.outputs.configured == 'true'
@@ -380,8 +359,53 @@ jobs:
           echo "name=$IMAGE_NAME" >> $GITHUB_OUTPUT
           echo "🐳 Docker image name: $IMAGE_NAME"
 
-      - name: "Extract metadata (tags, labels) for Docker"
+      - name: "Check if version already exists on Docker Hub"
         if: steps.check-secrets.outputs.configured == 'true'
+        id: check-docker-version
+        run: |
+          VERSION="${{ needs.check_for_release.outputs.version }}"
+          IMAGE_NAME="${{ secrets.DOCKERHUB_USERNAME }}/${{ steps.image-name.outputs.name }}"
+
+          echo "Image: $IMAGE_NAME"
+          echo "Version: $VERSION"
+
+          # Check if tag exists on Docker Hub using the API
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://hub.docker.com/v2/repositories/${IMAGE_NAME}/tags/${VERSION}")
+
+          if [ "$HTTP_STATUS" == "200" ]; then
+            echo "version_exists=true" >> $GITHUB_OUTPUT
+            echo "ℹ️  Version $VERSION already exists on Docker Hub ($IMAGE_NAME:$VERSION), skipping push"
+          else
+            echo "version_exists=false" >> $GITHUB_OUTPUT
+            echo "✅ Version $VERSION not on Docker Hub, will build and push"
+          fi
+
+      - name: "Checkout"
+        if: steps.check-secrets.outputs.configured == 'true' && steps.check-docker-version.outputs.version_exists != 'true'
+        uses: actions/checkout@v4
+
+      - name: "Set up QEMU"
+        if: steps.check-secrets.outputs.configured == 'true' && steps.check-docker-version.outputs.version_exists != 'true'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: "arm64,amd64"
+
+      - name: "Set up Docker Buildx"
+        if: steps.check-secrets.outputs.configured == 'true' && steps.check-docker-version.outputs.version_exists != 'true'
+        uses: docker/setup-buildx-action@v3
+        with:
+          platforms: linux/arm64,linux/amd64
+
+      - name: "Login to Docker Hub"
+        if: steps.check-secrets.outputs.configured == 'true' && steps.check-docker-version.outputs.version_exists != 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: "Extract metadata (tags, labels) for Docker"
+        if: steps.check-secrets.outputs.configured == 'true' && steps.check-docker-version.outputs.version_exists != 'true'
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -393,7 +417,7 @@ jobs:
             type=semver,pattern={{version}},value=${{ needs.check_for_release.outputs.version }}
 
       - name: "Build and push Docker image"
-        if: steps.check-secrets.outputs.configured == 'true'
+        if: steps.check-secrets.outputs.configured == 'true' && steps.check-docker-version.outputs.version_exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -405,7 +429,7 @@ jobs:
             NPM_TOKEN=${{ secrets.NPM_TOKEN }}
 
       - name: "Notify Docker deployment success"
-        if: success() && steps.check-secrets.outputs.configured == 'true'
+        if: success() && steps.check-secrets.outputs.configured == 'true' && steps.check-docker-version.outputs.version_exists != 'true'
         run: |
           echo "🐳 Docker image pushed successfully!"
           echo "• Image: ${{ secrets.DOCKERHUB_USERNAME }}/${{ steps.image-name.outputs.name }}:latest"
