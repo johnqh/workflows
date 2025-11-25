@@ -240,6 +240,12 @@ jobs:
           node-version: ${{ inputs.node-version }}
           registry-url: "https://registry.npmjs.org"
 
+      - name: "Configure npm authentication"
+        if: steps.check-secrets.outputs.configured == 'true'
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
+          echo "@sudobility:registry=https://registry.npmjs.org/" >> ~/.npmrc
+
       - name: "Check if version already published to NPM"
         if: steps.check-secrets.outputs.configured == 'true'
         id: check-npm-version
@@ -250,7 +256,7 @@ jobs:
           echo "Package: $PACKAGE_NAME"
           echo "Current version: $CURRENT_VERSION"
 
-          # Get published version from NPM registry
+          # Get published version from NPM registry (requires auth for scoped packages)
           PUBLISHED_VERSION=$(npm view "$PACKAGE_NAME" version 2>/dev/null || echo "0.0.0")
           echo "Published version on NPM: $PUBLISHED_VERSION"
 
@@ -261,12 +267,8 @@ jobs:
             echo "version_exists=false" >> $GITHUB_OUTPUT
             echo "✅ Version $CURRENT_VERSION not on NPM, will publish"
           fi
-
-      - name: "Configure npm authentication"
-        if: steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true'
-        run: |
-          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
-          echo "@sudobility:registry=https://registry.npmjs.org/" >> ~/.npmrc
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: "Install dependencies"
         if: steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true'
