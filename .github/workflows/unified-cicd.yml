@@ -82,6 +82,7 @@ jobs:
             npm ci
           fi
         env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: "Run type checking"
@@ -255,12 +256,14 @@ jobs:
             echo "✅ Version $CURRENT_VERSION not on NPM, will publish"
           fi
         env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: "Install dependencies"
         if: steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true'
         run: npm ci
         env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: "Run tests"
@@ -472,6 +475,7 @@ jobs:
             npm ci
           fi
         env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: "Run linting (non-blocking)"
@@ -618,6 +622,7 @@ jobs:
             npm ci
           fi
         env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: "Run linting (non-blocking)"
