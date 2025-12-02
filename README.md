@@ -1,6 +1,6 @@
 # Unified CI/CD Workflows
 
-This repository contains reusable GitHub Actions workflows for the 0xmail.box ecosystem.
+This repository contains reusable GitHub Actions workflows for the Web3 Email ecosystem.
 
 ## Overview
 
@@ -97,7 +97,7 @@ jobs:
   cicd:
     uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
     with:
-      cloudflare-project-name: "0xmail-box"  # optional, defaults to repo name
+      cloudflare-project-name: "{project_name}"  # optional, defaults to repo name
     secrets: inherit  # Pass all repository secrets to the workflow
 ```
 
@@ -344,7 +344,7 @@ secrets:
 ### mail_box (Web App)
 ```yaml
 with:
-  cloudflare-project-name: "0xmail-box"
+  cloudflare-project-name: "{project_name}"
 secrets:
   CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
   CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

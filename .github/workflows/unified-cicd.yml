@@ -70,15 +70,6 @@ jobs:
           node-version: ${{ inputs.node-version }}
           registry-url: "https://registry.npmjs.org"
 
-      - name: "Configure npm authentication"
-        run: |
-          if [ -n "${{ secrets.NPM_TOKEN }}" ]; then
-            echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
-            echo "@sudobility:registry=https://registry.npmjs.org/" >> ~/.npmrc
-          else
-            echo "ℹ️  No NPM_TOKEN provided, skipping authentication"
-          fi
-
       - name: "Install dependencies"
         run: |
           # Workaround for Rollup optional dependencies issue
@@ -239,12 +230,6 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
           registry-url: "https://registry.npmjs.org"
-
-      - name: "Configure npm authentication"
-        if: steps.check-secrets.outputs.configured == 'true'
-        run: |
-          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
-          echo "@sudobility:registry=https://registry.npmjs.org/" >> ~/.npmrc
 
       - name: "Check if version already published to NPM"
         if: steps.check-secrets.outputs.configured == 'true'
@@ -468,17 +453,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}
+          registry-url: "https://registry.npmjs.org"
           cache: "npm"
-
-      - name: "Configure npm authentication"
-        if: steps.check-secrets.outputs.configured == 'true'
-        run: |
-          if [ -n "${{ secrets.NPM_TOKEN }}" ]; then
-            echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
-            echo "@sudobility:registry=https://registry.npmjs.org/" >> ~/.npmrc
-          else
-            echo "ℹ️  No NPM_TOKEN provided, skipping authentication"
-          fi
 
       - name: "Install dependencies"
         if: steps.check-secrets.outputs.configured == 'true'
@@ -567,16 +543,6 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
 
-      - name: "Configure npm authentication"
-        if: steps.check-secrets.outputs.configured == 'true'
-        run: |
-          if [ -n "${{ secrets.NPM_TOKEN }}" ]; then
-            echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
-            echo "@sudobility:registry=https://registry.npmjs.org/" >> ~/.npmrc
-          else
-            echo "ℹ️  No NPM_TOKEN provided, skipping authentication"
-          fi
-
       - name: "Install Railway CLI"
         if: steps.check-secrets.outputs.configured == 'true'
         run: |
@@ -634,16 +600,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}
-
-      - name: "Configure npm authentication"
-        if: steps.check-secrets.outputs.configured == 'true'
-        run: |
-          if [ -n "${{ secrets.NPM_TOKEN }}" ]; then
-            echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
-            echo "@sudobility:registry=https://registry.npmjs.org/" >> ~/.npmrc
-          else
-            echo "ℹ️  No NPM_TOKEN provided, skipping authentication"
-          fi
+          registry-url: "https://registry.npmjs.org"
 
       - name: "Install dependencies"
         if: steps.check-secrets.outputs.configured == 'true'

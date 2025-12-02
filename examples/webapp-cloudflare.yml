@@ -25,6 +25,6 @@ jobs:
   cicd:
     uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
     with:
-      cloudflare-project-name: "0xmail-box"  # Change to your Cloudflare project name
+      cloudflare-project-name: "{project_name}"  # Change to your Cloudflare project name
       docker-image-name: "mail-box"  # Only used if Docker Hub secrets are configured
     secrets: inherit  # Pass all repository secrets to the workflow
