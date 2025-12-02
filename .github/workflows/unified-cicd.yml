@@ -107,6 +107,8 @@ jobs:
 
       - name: "Build project"
         run: |
+          # Pass VITE_* secrets as environment variables to the build
+          export $(echo '${{ toJSON(secrets) }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' | grep -E '^(VITE_|REACT_APP_|NEXT_PUBLIC_|BUILD_)' || true)
           # Use build:ci if available (e.g., for mail_box_contracts without cargo)
           if grep -q '"build:ci"' package.json 2>/dev/null; then
             echo "📦 Using build:ci script"
