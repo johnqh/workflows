@@ -1,0 +1,12 @@
+{
+  "name": "@0xmail/workflows",
+  "version": "1.0.0",
+  "description": "Shared workflow scripts for 0xmail projects",
+  "scripts": {
+    "localize": "node scripts/localize.cjs"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "dotenv": "^16.4.5"
+  }
+}

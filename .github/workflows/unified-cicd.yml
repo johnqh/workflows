@@ -8,6 +8,10 @@ on:
         description: "Node.js version to use"
         type: string
         default: "22.x"
+      bun-version:
+        description: "Bun version to use (only when bun.lock is detected)"
+        type: string
+        default: "latest"
       npm-access:
         description: "NPM package access level: public or restricted (only used if NPM_TOKEN is set)"
         type: string
@@ -64,13 +68,38 @@ jobs:
       - name: "Checkout"
         uses: actions/checkout@v4
 
+      - name: "Detect package manager"
+        id: detect-pm
+        run: |
+          if [ -f "bun.lock" ] || [ -f "bun.lockb" ]; then
+            echo "manager=bun" >> $GITHUB_OUTPUT
+            echo "🥟 Detected Bun project (bun.lock found)"
+          else
+            echo "manager=npm" >> $GITHUB_OUTPUT
+            echo "📦 Detected npm project"
+          fi
+
+      - name: "Setup Bun"
+        if: steps.detect-pm.outputs.manager == 'bun'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ inputs.bun-version }}
+
       - name: "Setup Node.js"
+        if: steps.detect-pm.outputs.manager == 'npm'
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}
           registry-url: "https://registry.npmjs.org"
 
-      - name: "Install dependencies"
+      - name: "Install dependencies (Bun)"
+        if: steps.detect-pm.outputs.manager == 'bun'
+        run: bun install
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: "Install dependencies (npm)"
+        if: steps.detect-pm.outputs.manager == 'npm'
         run: |
           # Workaround for Rollup optional dependencies issue
           # https://github.com/npm/cli/issues/4828
@@ -88,35 +117,62 @@ jobs:
       - name: "Run type checking"
         run: |
           if [ -f "tsconfig.json" ]; then
-            npm run typecheck || npm run type-check || echo "⚠️  No typecheck script found"
+            if [ "${{ steps.detect-pm.outputs.manager }}" == "bun" ]; then
+              bun run typecheck || bun run type-check || bunx tsc --noEmit || echo "⚠️  No typecheck script found"
+            else
+              npm run typecheck || npm run type-check || echo "⚠️  No typecheck script found"
+            fi
           else
             echo "ℹ️  No tsconfig.json found, skipping type check"
           fi
 
       - name: "Run linting"
-        run: npm run lint || echo "⚠️  No lint script found"
+        run: |
+          if [ "${{ steps.detect-pm.outputs.manager }}" == "bun" ]; then
+            bun run lint || echo "⚠️  No lint script found"
+          else
+            npm run lint || echo "⚠️  No lint script found"
+          fi
 
       - name: "Run tests"
         run: |
+          PM="${{ steps.detect-pm.outputs.manager }}"
           # Use test:unit if available (excludes integration tests)
           if grep -q '"test:unit"' package.json 2>/dev/null; then
             echo "📦 Using test:unit script (unit tests only)"
-            npm run test:unit || echo "⚠️  Unit tests failed or not found"
+            if [ "$PM" == "bun" ]; then
+              bun run test:unit || echo "⚠️  Unit tests failed or not found"
+            else
+              npm run test:unit || echo "⚠️  Unit tests failed or not found"
+            fi
           else
-            npm test || echo "⚠️  No test script found"
+            if [ "$PM" == "bun" ]; then
+              bun test || echo "⚠️  No test script found"
+            else
+              npm test || echo "⚠️  No test script found"
+            fi
           fi
 
       - name: "Build project"
         run: |
+          PM="${{ steps.detect-pm.outputs.manager }}"
           # Pass VITE_* secrets as environment variables to the build
           export $(echo '${{ toJSON(secrets) }}' | jq -r 'to_entries[] | "\(.key)=\(.value)"' | grep -E '^(VITE_|REACT_APP_|NEXT_PUBLIC_|BUILD_)' || true)
           # Use build:ci if available (e.g., for mail_box_contracts without cargo)
           if grep -q '"build:ci"' package.json 2>/dev/null; then
             echo "📦 Using build:ci script"
-            npm run build:ci
+            if [ "$PM" == "bun" ]; then
+              bun run build:ci
+            else
+              npm run build:ci
+            fi
           elif grep -q '"build"' package.json 2>/dev/null; then
             echo "📦 Using build script"
-            npm run build
+            if [ "$PM" == "bun" ]; then
+              bun run build
+            else
+              npm run build
+            fi
           else
             echo "ℹ️  No build script found, skipping build step"
           fi
