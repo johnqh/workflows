@@ -283,8 +283,26 @@ jobs:
         if: steps.check-secrets.outputs.configured == 'true'
         uses: actions/checkout@v4
 
-      - name: "Setup Node.js"
+      - name: "Detect package manager"
         if: steps.check-secrets.outputs.configured == 'true'
+        id: detect-pm
+        run: |
+          if [ -f "bun.lock" ] || [ -f "bun.lockb" ]; then
+            echo "manager=bun" >> $GITHUB_OUTPUT
+            echo "🥟 Detected Bun project (bun.lock found)"
+          else
+            echo "manager=npm" >> $GITHUB_OUTPUT
+            echo "📦 Detected npm project"
+          fi
+
+      - name: "Setup Bun"
+        if: steps.check-secrets.outputs.configured == 'true' && steps.detect-pm.outputs.manager == 'bun'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ inputs.bun-version }}
+
+      - name: "Setup Node.js"
+        if: steps.check-secrets.outputs.configured == 'true' && steps.detect-pm.outputs.manager == 'npm'
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}
@@ -315,8 +333,14 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: "Install dependencies"
-        if: steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true'
+      - name: "Install dependencies (Bun)"
+        if: steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true' && steps.detect-pm.outputs.manager == 'bun'
+        run: bun install
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: "Install dependencies (npm)"
+        if: steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true' && steps.detect-pm.outputs.manager == 'npm'
         run: npm ci
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -324,18 +348,32 @@ jobs:
 
       - name: "Run tests"
         if: steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true'
-        run: npm test || echo "⚠️  No tests found"
+        run: |
+          if [ "${{ steps.detect-pm.outputs.manager }}" == "bun" ]; then
+            bun test || echo "⚠️  No tests found"
+          else
+            npm test || echo "⚠️  No tests found"
+          fi
 
       - name: "Build project"
         if: steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true'
         run: |
+          PM="${{ steps.detect-pm.outputs.manager }}"
           # Use build:ci if available (e.g., for mail_box_contracts without cargo)
           if grep -q '"build:ci"' package.json 2>/dev/null; then
             echo "📦 Using build:ci script"
-            npm run build:ci
+            if [ "$PM" == "bun" ]; then
+              bun run build:ci
+            else
+              npm run build:ci
+            fi
           elif grep -q '"build"' package.json 2>/dev/null; then
             echo "📦 Using build script"
-            npm run build
+            if [ "$PM" == "bun" ]; then
+              bun run build
+            else
+              npm run build
+            fi
           else
             echo "ℹ️  No build script found, skipping build step"
           fi
