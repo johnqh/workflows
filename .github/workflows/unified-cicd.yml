@@ -302,7 +302,7 @@ jobs:
           bun-version: ${{ inputs.bun-version }}
 
       - name: "Setup Node.js"
-        if: steps.check-secrets.outputs.configured == 'true' && steps.detect-pm.outputs.manager == 'npm'
+        if: steps.check-secrets.outputs.configured == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}
