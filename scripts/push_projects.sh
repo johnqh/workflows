@@ -606,6 +606,12 @@ process_project() {
         has_changes=true
     fi
 
+    if [ "$has_changes" = true ]; then
+        log_info "Changed files:"
+        git diff --name-only
+        git diff --cached --name-only
+    fi
+
     if [ "$has_changes" = false ] && [ "$FORCE_MODE" = false ]; then
         log_info "No changes detected in $project_name, skipping"
         return 0
