@@ -601,24 +601,20 @@ process_project() {
         fi
     fi
 
-    # Only check for changes in package.json (not package-lock.json or build artifacts)
-    # This prevents unnecessary version bumps from lockfile reformatting
-    local has_package_changes=false
-    if ! git diff --quiet -- package.json; then
-        has_package_changes=true
+    local has_changes=false
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        has_changes=true
     fi
 
-    if [ "$has_package_changes" = false ] && [ "$FORCE_MODE" = false ]; then
-        # Discard any unintended changes (like lockfile reformatting)
-        git checkout -- . 2>/dev/null || true
-        log_info "No package.json changes in $project_name, skipping"
+    if [ "$has_changes" = false ] && [ "$FORCE_MODE" = false ]; then
+        log_info "No changes detected in $project_name, skipping"
         return 0
     fi
 
-    if [ "$FORCE_MODE" = true ] && [ "$has_package_changes" = false ]; then
+    if [ "$FORCE_MODE" = true ] && [ "$has_changes" = false ]; then
         log_warning "FORCE MODE: Proceeding with version bump despite no changes"
     else
-        log_info "package.json changed, proceeding with validation and version bump"
+        log_info "Changes detected, proceeding with validation and version bump"
     fi
 
     log_info "Running validation checks..."
