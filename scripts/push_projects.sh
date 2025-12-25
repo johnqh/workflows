@@ -357,11 +357,18 @@ validate_project() {
             fi
         else
             log_info "Running tests..."
+            # Try various test runners:
+            # - test:run: explicit single-run script
+            # - test -- --run: vitest single-run flag
+            # - test -- --ci: jest CI mode (disables watch)
+            # - test -- --watchAll=false: jest explicit no-watch
             if npm run test:run >/dev/null 2>&1; then
                 log_success "Tests passed"
             elif npm run test -- --run >/dev/null 2>&1; then
                 log_success "Tests passed"
-            elif npm test >/dev/null 2>&1; then
+            elif npm test -- --ci >/dev/null 2>&1; then
+                log_success "Tests passed"
+            elif npm test -- --watchAll=false >/dev/null 2>&1; then
                 log_success "Tests passed"
             else
                 log_error "Tests failed"
@@ -413,7 +420,9 @@ validate_subpackage() {
                 log_success "    Tests passed"
             elif npm run test -- --run >/dev/null 2>&1; then
                 log_success "    Tests passed"
-            elif npm test >/dev/null 2>&1; then
+            elif npm test -- --ci >/dev/null 2>&1; then
+                log_success "    Tests passed"
+            elif npm test -- --watchAll=false >/dev/null 2>&1; then
                 log_success "    Tests passed"
             else
                 log_error "    Tests failed for $package_name"
