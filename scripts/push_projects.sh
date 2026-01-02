@@ -107,20 +107,35 @@ pm_install() {
 pm_run() {
     local script="$1"
     shift
-    local args=("$@")
 
     case "$PKG_MANAGER" in
         bun)
-            bun run "$script" ${args[@]+"${args[@]}"}
+            if [ $# -gt 0 ]; then
+                bun run "$script" "$@"
+            else
+                bun run "$script"
+            fi
             ;;
         pnpm)
-            pnpm run "$script" ${args[@]+"${args[@]}"}
+            if [ $# -gt 0 ]; then
+                pnpm run "$script" "$@"
+            else
+                pnpm run "$script"
+            fi
             ;;
         yarn)
-            yarn run "$script" ${args[@]+"${args[@]}"}
+            if [ $# -gt 0 ]; then
+                yarn run "$script" "$@"
+            else
+                yarn run "$script"
+            fi
             ;;
         npm|*)
-            npm run "$script" -- ${args[@]+"${args[@]}"}
+            if [ $# -gt 0 ]; then
+                npm run "$script" -- "$@"
+            else
+                npm run "$script"
+            fi
             ;;
     esac
 }
@@ -129,20 +144,35 @@ pm_run() {
 pm_exec() {
     local cmd="$1"
     shift
-    local args=("$@")
 
     case "$PKG_MANAGER" in
         bun)
-            bunx "$cmd" ${args[@]+"${args[@]}"}
+            if [ $# -gt 0 ]; then
+                bunx "$cmd" "$@"
+            else
+                bunx "$cmd"
+            fi
             ;;
         pnpm)
-            pnpm exec "$cmd" ${args[@]+"${args[@]}"}
+            if [ $# -gt 0 ]; then
+                pnpm exec "$cmd" "$@"
+            else
+                pnpm exec "$cmd"
+            fi
             ;;
         yarn)
-            yarn exec "$cmd" ${args[@]+"${args[@]}"}
+            if [ $# -gt 0 ]; then
+                yarn exec "$cmd" "$@"
+            else
+                yarn exec "$cmd"
+            fi
             ;;
         npm|*)
-            npx "$cmd" ${args[@]+"${args[@]}"}
+            if [ $# -gt 0 ]; then
+                npx "$cmd" "$@"
+            else
+                npx "$cmd"
+            fi
             ;;
     esac
 }
