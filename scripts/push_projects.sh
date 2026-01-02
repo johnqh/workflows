@@ -38,6 +38,135 @@ FORCE_MODE=false
 SUBPACKAGES_MODE=false
 PROJECTS_FILE=""
 
+# Package manager for current project (detected per-project)
+PKG_MANAGER=""
+PKG_LOCKFILE=""
+
+# Detect package manager based on lockfile
+detect_package_manager() {
+    local project_dir="$1"
+
+    if [ -f "$project_dir/bun.lock" ] || [ -f "$project_dir/bun.lockb" ]; then
+        PKG_MANAGER="bun"
+        PKG_LOCKFILE="bun.lock"
+    elif [ -f "$project_dir/pnpm-lock.yaml" ]; then
+        PKG_MANAGER="pnpm"
+        PKG_LOCKFILE="pnpm-lock.yaml"
+    elif [ -f "$project_dir/yarn.lock" ]; then
+        PKG_MANAGER="yarn"
+        PKG_LOCKFILE="yarn.lock"
+    elif [ -f "$project_dir/package-lock.json" ]; then
+        PKG_MANAGER="npm"
+        PKG_LOCKFILE="package-lock.json"
+    else
+        # Default to npm if no lockfile found
+        PKG_MANAGER="npm"
+        PKG_LOCKFILE="package-lock.json"
+    fi
+
+    log_info "Detected package manager: $PKG_MANAGER (lockfile: $PKG_LOCKFILE)"
+}
+
+# Run package manager install command
+pm_install() {
+    local packages=("$@")
+
+    case "$PKG_MANAGER" in
+        bun)
+            if [ ${#packages[@]} -eq 0 ]; then
+                bun install
+            else
+                bun add "${packages[@]}"
+            fi
+            ;;
+        pnpm)
+            if [ ${#packages[@]} -eq 0 ]; then
+                pnpm install
+            else
+                pnpm add "${packages[@]}"
+            fi
+            ;;
+        yarn)
+            if [ ${#packages[@]} -eq 0 ]; then
+                yarn install
+            else
+                yarn add "${packages[@]}"
+            fi
+            ;;
+        npm|*)
+            if [ ${#packages[@]} -eq 0 ]; then
+                npm install --legacy-peer-deps
+            else
+                npm install "${packages[@]}" --save-exact=false --legacy-peer-deps
+            fi
+            ;;
+    esac
+}
+
+# Run package manager script
+pm_run() {
+    local script="$1"
+    shift
+    local args=("$@")
+
+    case "$PKG_MANAGER" in
+        bun)
+            bun run "$script" "${args[@]}"
+            ;;
+        pnpm)
+            pnpm run "$script" "${args[@]}"
+            ;;
+        yarn)
+            yarn run "$script" "${args[@]}"
+            ;;
+        npm|*)
+            npm run "$script" -- "${args[@]}"
+            ;;
+    esac
+}
+
+# Run package manager exec (npx equivalent)
+pm_exec() {
+    local cmd="$1"
+    shift
+    local args=("$@")
+
+    case "$PKG_MANAGER" in
+        bun)
+            bunx "$cmd" "${args[@]}"
+            ;;
+        pnpm)
+            pnpm exec "$cmd" "${args[@]}"
+            ;;
+        yarn)
+            yarn exec "$cmd" "${args[@]}"
+            ;;
+        npm|*)
+            npx "$cmd" "${args[@]}"
+            ;;
+    esac
+}
+
+# Bump version using package manager
+pm_version_bump() {
+    case "$PKG_MANAGER" in
+        bun)
+            # Bun doesn't have version command, use npm
+            npm version patch --no-git-tag-version
+            ;;
+        pnpm)
+            # pnpm uses npm version under the hood
+            npm version patch --no-git-tag-version
+            ;;
+        yarn)
+            yarn version --patch --no-git-tag-version
+            ;;
+        npm|*)
+            npm version patch --no-git-tag-version
+            ;;
+    esac
+}
+
 # Ensure NPM_TOKEN is set for private package access
 if [ -z "${NPM_TOKEN:-}" ]; then
     if [ -f "$HOME/.npmrc" ]; then
@@ -82,10 +211,17 @@ This script should be sourced by a project-specific script that defines:
   PROJECTS - Array of "path:wait_after_seconds" entries
 
 LOGIC:
-    1. Always update @sudobility dependencies to latest
-    2. Check if there are any changed files (including package.json)
-    3. If changes exist (or --force): validate, bump version, update lock, commit, push
-    4. If no changes: skip to next package
+    1. Detect package manager (bun, pnpm, yarn, npm) based on lockfile
+    2. Always update @sudobility dependencies to latest
+    3. Check if there are any changed files (including package.json)
+    4. If changes exist (or --force): validate, bump version, update lock, commit, push
+    5. If no changes: skip to next package
+
+SUPPORTED PACKAGE MANAGERS:
+    - bun   (detected via bun.lock or bun.lockb)
+    - pnpm  (detected via pnpm-lock.yaml)
+    - yarn  (detected via yarn.lock)
+    - npm   (detected via package-lock.json, or as default)
 
 OPTIONS:
     --force, -f         Force version bump on all projects even without changes
@@ -206,8 +342,8 @@ update_sudobility_deps() {
         done
 
         if [ ${#packages_to_update[@]} -gt 0 ]; then
-            log_info "Installing all updates together..."
-            if npm install "${packages_to_update[@]}" --save-exact=false --legacy-peer-deps 2>&1 | grep -v "npm WARN" || true; then
+            log_info "Installing all updates together using $PKG_MANAGER..."
+            if pm_install "${packages_to_update[@]}" 2>&1 | grep -v "WARN" || true; then
                 log_success "Updated @sudobility dependencies"
             else
                 log_error "Failed to update dependencies"
@@ -316,7 +452,7 @@ validate_project() {
     # Typecheck
     if [ "$(has_typecheck_script "$pkg_json")" = "yes" ]; then
         log_info "Running typecheck..."
-        if ! npm run typecheck 2>&1 | tee /tmp/typecheck.log; then
+        if ! pm_run typecheck 2>&1 | tee /tmp/typecheck.log; then
             log_error "Typecheck failed"
             cat /tmp/typecheck.log
             return 1
@@ -325,7 +461,7 @@ validate_project() {
     else
         if [ -f "$project_dir/tsconfig.json" ]; then
             log_info "Running tsc --noEmit..."
-            if ! npx tsc --noEmit 2>&1 | tee /tmp/tsc.log; then
+            if ! pm_exec tsc --noEmit 2>&1 | tee /tmp/tsc.log; then
                 log_error "TypeScript compilation failed"
                 cat /tmp/tsc.log
                 return 1
@@ -337,7 +473,7 @@ validate_project() {
     # Lint
     if [ "$(has_lint_script "$pkg_json")" = "yes" ]; then
         log_info "Running lint..."
-        if ! npm run lint 2>&1 | tee /tmp/lint.log; then
+        if ! pm_run lint 2>&1 | tee /tmp/lint.log; then
             log_error "Lint failed"
             cat /tmp/lint.log
             return 1
@@ -349,7 +485,7 @@ validate_project() {
     if [ "$(has_test_script "$pkg_json")" = "yes" ]; then
         if [ "$(has_unit_test_script "$pkg_json")" = "yes" ]; then
             log_info "Running unit tests (test:unit)..."
-            if npm run test:unit >/dev/null 2>&1; then
+            if pm_run test:unit >/dev/null 2>&1; then
                 log_success "Unit tests passed"
             else
                 log_error "Unit tests failed"
@@ -361,11 +497,11 @@ validate_project() {
             # - test:run: explicit single-run script
             # - test -- --run: vitest single-run flag
             # - test -- --ci --forceExit: jest CI mode with force exit (for open handles)
-            if npm run test:run >/dev/null 2>&1; then
+            if pm_run test:run >/dev/null 2>&1; then
                 log_success "Tests passed"
-            elif npm run test -- --run >/dev/null 2>&1; then
+            elif pm_run test --run >/dev/null 2>&1; then
                 log_success "Tests passed"
-            elif npm test -- --ci --forceExit >/dev/null 2>&1; then
+            elif pm_run test --ci --forceExit >/dev/null 2>&1; then
                 log_success "Tests passed"
             else
                 log_error "Tests failed"
@@ -377,11 +513,11 @@ validate_project() {
     # Build
     if [ "$(has_build_script "$pkg_json")" = "yes" ]; then
         log_info "Running build..."
-        if npm run build >/dev/null 2>&1; then
+        if pm_run build >/dev/null 2>&1; then
             log_success "Build passed"
         else
             log_error "Build failed"
-            npm run build 2>&1 | tail -50
+            pm_run build 2>&1 | tail -50
             return 1
         fi
     fi
@@ -405,7 +541,7 @@ validate_subpackage() {
     if [ "$(has_test_script "$pkg_json")" = "yes" ]; then
         if [ "$(has_unit_test_script "$pkg_json")" = "yes" ]; then
             log_info "    Running unit tests (test:unit)..."
-            if npm run test:unit >/dev/null 2>&1; then
+            if pm_run test:unit >/dev/null 2>&1; then
                 log_success "    Unit tests passed"
             else
                 log_error "    Unit tests failed for $package_name"
@@ -413,11 +549,11 @@ validate_subpackage() {
             fi
         else
             log_info "    Running tests..."
-            if npm run test:run >/dev/null 2>&1; then
+            if pm_run test:run >/dev/null 2>&1; then
                 log_success "    Tests passed"
-            elif npm run test -- --run >/dev/null 2>&1; then
+            elif pm_run test --run >/dev/null 2>&1; then
                 log_success "    Tests passed"
-            elif npm test -- --ci --forceExit >/dev/null 2>&1; then
+            elif pm_run test --ci --forceExit >/dev/null 2>&1; then
                 log_success "    Tests passed"
             else
                 log_error "    Tests failed for $package_name"
@@ -430,11 +566,11 @@ validate_subpackage() {
 
     if [ "$(has_build_script "$pkg_json")" = "yes" ]; then
         log_info "    Running build..."
-        if npm run build >/dev/null 2>&1; then
+        if pm_run build >/dev/null 2>&1; then
             log_success "    Build passed"
         else
             log_error "    Build failed for $package_name"
-            npm run build 2>&1 | tail -30
+            pm_run build 2>&1 | tail -30
             return 1
         fi
     fi
@@ -504,7 +640,7 @@ bump_version() {
 
     log_info "Bumping patch version..."
 
-    if npm version patch --no-git-tag-version >/dev/null 2>&1; then
+    if pm_version_bump >/dev/null 2>&1; then
         local new_version=$(node -e "console.log(require('$pkg_json').version)")
         log_success "Version bumped to $new_version"
         return 0
@@ -591,6 +727,9 @@ process_project() {
         return 0
     fi
 
+    # Detect package manager for this project
+    detect_package_manager "$project_path"
+
     log_info "Updating @sudobility dependencies to latest..."
     update_sudobility_deps "$project_path" || true
 
@@ -636,12 +775,12 @@ process_project() {
         return 1
     fi
 
-    log_info "Updating package-lock.json..."
-    if ! npm install --legacy-peer-deps >/dev/null 2>&1; then
-        log_error "Failed to update package-lock.json"
+    log_info "Updating $PKG_LOCKFILE..."
+    if ! pm_install >/dev/null 2>&1; then
+        log_error "Failed to update $PKG_LOCKFILE"
         return 1
     fi
-    log_success "package-lock.json updated"
+    log_success "$PKG_LOCKFILE updated"
 
     if ! commit_and_push "$project_path" "$project_name"; then
         log_error "Failed to commit and push for $project_name"
