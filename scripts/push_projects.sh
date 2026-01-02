@@ -111,16 +111,16 @@ pm_run() {
 
     case "$PKG_MANAGER" in
         bun)
-            bun run "$script" "${args[@]}"
+            bun run "$script" ${args[@]+"${args[@]}"}
             ;;
         pnpm)
-            pnpm run "$script" "${args[@]}"
+            pnpm run "$script" ${args[@]+"${args[@]}"}
             ;;
         yarn)
-            yarn run "$script" "${args[@]}"
+            yarn run "$script" ${args[@]+"${args[@]}"}
             ;;
         npm|*)
-            npm run "$script" -- "${args[@]}"
+            npm run "$script" -- ${args[@]+"${args[@]}"}
             ;;
     esac
 }
@@ -133,16 +133,16 @@ pm_exec() {
 
     case "$PKG_MANAGER" in
         bun)
-            bunx "$cmd" "${args[@]}"
+            bunx "$cmd" ${args[@]+"${args[@]}"}
             ;;
         pnpm)
-            pnpm exec "$cmd" "${args[@]}"
+            pnpm exec "$cmd" ${args[@]+"${args[@]}"}
             ;;
         yarn)
-            yarn exec "$cmd" "${args[@]}"
+            yarn exec "$cmd" ${args[@]+"${args[@]}"}
             ;;
         npm|*)
-            npx "$cmd" "${args[@]}"
+            npx "$cmd" ${args[@]+"${args[@]}"}
             ;;
     esac
 }
