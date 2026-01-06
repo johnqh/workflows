@@ -92,6 +92,12 @@ jobs:
           node-version: ${{ inputs.node-version }}
           registry-url: "https://registry.npmjs.org"
 
+      - name: "Setup npm auth for Bun"
+        if: steps.detect-pm.outputs.manager == 'bun' && env.NPM_TOKEN != ''
+        run: echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" >> ~/.npmrc
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
       - name: "Install dependencies (Bun)"
         if: steps.detect-pm.outputs.manager == 'bun'
         run: bun install
@@ -331,6 +337,12 @@ jobs:
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: "Setup npm auth for Bun"
+        if: steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true' && steps.detect-pm.outputs.manager == 'bun'
+        run: echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" >> ~/.npmrc
+        env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: "Install dependencies (Bun)"

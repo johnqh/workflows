@@ -26,6 +26,9 @@
 set -e  # Exit on error
 set -u  # Exit on undefined variable
 
+# Disable interactive pager for git commands
+export GIT_PAGER=cat
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
