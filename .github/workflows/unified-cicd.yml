@@ -103,6 +103,7 @@ jobs:
         run: bun install
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          BUN_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: "Install dependencies (npm)"
         if: steps.detect-pm.outputs.manager == 'npm'
@@ -350,6 +351,7 @@ jobs:
         run: bun install
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          BUN_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: "Install dependencies (npm)"
         if: steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true' && steps.detect-pm.outputs.manager == 'npm'
