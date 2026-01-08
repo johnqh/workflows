@@ -123,41 +123,74 @@ jobs:
 
       - name: "Run type checking"
         run: |
-          if [ -f "tsconfig.json" ]; then
-            if [ "${{ steps.detect-pm.outputs.manager }}" == "bun" ]; then
-              bun run typecheck || bun run type-check || bunx tsc --noEmit || echo "⚠️  No typecheck script found"
+          if [ ! -f "tsconfig.json" ]; then
+            echo "ℹ️  No tsconfig.json found, skipping type check"
+            exit 0
+          fi
+
+          PM="${{ steps.detect-pm.outputs.manager }}"
+
+          # Check which typecheck script exists
+          if grep -q '"typecheck"' package.json 2>/dev/null; then
+            echo "📝 Running typecheck script"
+            if [ "$PM" == "bun" ]; then
+              bun run typecheck
             else
-              npm run typecheck || npm run type-check || echo "⚠️  No typecheck script found"
+              npm run typecheck
+            fi
+          elif grep -q '"type-check"' package.json 2>/dev/null; then
+            echo "📝 Running type-check script"
+            if [ "$PM" == "bun" ]; then
+              bun run type-check
+            else
+              npm run type-check
             fi
           else
-            echo "ℹ️  No tsconfig.json found, skipping type check"
+            echo "📝 No typecheck script found, running tsc directly"
+            if [ "$PM" == "bun" ]; then
+              bunx tsc --noEmit
+            else
+              npx tsc --noEmit
+            fi
           fi
 
       - name: "Run linting"
         run: |
-          if [ "${{ steps.detect-pm.outputs.manager }}" == "bun" ]; then
-            bun run lint || echo "⚠️  No lint script found"
+          PM="${{ steps.detect-pm.outputs.manager }}"
+
+          if ! grep -q '"lint"' package.json 2>/dev/null; then
+            echo "ℹ️  No lint script found, skipping"
+            exit 0
+          fi
+
+          echo "🔍 Running lint"
+          if [ "$PM" == "bun" ]; then
+            bun run lint
           else
-            npm run lint || echo "⚠️  No lint script found"
+            npm run lint
           fi
 
       - name: "Run tests"
         run: |
           PM="${{ steps.detect-pm.outputs.manager }}"
+
           # Use test:unit if available (excludes integration tests)
           if grep -q '"test:unit"' package.json 2>/dev/null; then
-            echo "📦 Using test:unit script (unit tests only)"
+            echo "🧪 Running test:unit script (unit tests only)"
             if [ "$PM" == "bun" ]; then
-              bun run test:unit || echo "⚠️  Unit tests failed or not found"
+              bun run test:unit
             else
-              npm run test:unit || echo "⚠️  Unit tests failed or not found"
+              npm run test:unit
+            fi
+          elif grep -q '"test"' package.json 2>/dev/null; then
+            echo "🧪 Running test script"
+            if [ "$PM" == "bun" ]; then
+              bun run test
+            else
+              npm test
             fi
           else
-            if [ "$PM" == "bun" ]; then
-              bun test || echo "⚠️  No test script found"
-            else
-              npm test || echo "⚠️  No test script found"
-            fi
+            echo "ℹ️  No test script found, skipping"
           fi
 
       - name: "Build project"
@@ -363,10 +396,18 @@ jobs:
       - name: "Run tests"
         if: steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true'
         run: |
-          if [ "${{ steps.detect-pm.outputs.manager }}" == "bun" ]; then
-            bun test || echo "⚠️  No tests found"
+          PM="${{ steps.detect-pm.outputs.manager }}"
+
+          if ! grep -q '"test"' package.json 2>/dev/null; then
+            echo "ℹ️  No test script found, skipping"
+            exit 0
+          fi
+
+          echo "🧪 Running tests"
+          if [ "$PM" == "bun" ]; then
+            bun run test
           else
-            npm test || echo "⚠️  No tests found"
+            npm test
           fi
 
       - name: "Build project"
