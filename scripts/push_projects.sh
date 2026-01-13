@@ -22,6 +22,7 @@
 #   --subpackages, -s   Also process sub-packages in /packages directories
 #   --projects-file     Read projects from a file (one per line, format: path:delay)
 #   --help, -h          Show help message
+#   --starting-project  Skip projects until reaching the specified project name
 
 set -e  # Exit on error
 set -u  # Exit on undefined variable
@@ -41,6 +42,7 @@ NC='\033[0m' # No Color
 FORCE_MODE=false
 SUBPACKAGES_MODE=false
 PROJECTS_FILE=""
+STARTING_PROJECT=""
 
 # Package manager for current project (detected per-project)
 PKG_MANAGER=""
@@ -258,10 +260,11 @@ SUPPORTED PACKAGE MANAGERS:
     - npm   (detected via package-lock.json, or as default)
 
 OPTIONS:
-    --force, -f         Force version bump on all projects even without changes
-    --subpackages, -s   Also process sub-packages in /packages directories
-    --projects-file     Read projects from a file (one per line, format: path:delay)
-    --help, -h          Show this help message
+    --force, -f           Force version bump on all projects even without changes
+    --subpackages, -s     Also process sub-packages in /packages directories
+    --projects-file       Read projects from a file (one per line, format: path:delay)
+    --starting-project    Skip projects until reaching the specified project name
+    --help, -h            Show this help message
 
 EXAMPLES:
     # In your push_all.sh:
@@ -270,6 +273,10 @@ EXAMPLES:
 
     # Or with a projects file:
     ./push_projects.sh --projects-file ./projects.txt
+
+    # Skip projects until reaching a specific one:
+    ./push_projects.sh --projects-file ./projects.txt --starting-project lib
+    # If projects are [types, lib, app], this skips types and starts from lib
 
 EOF
     exit 0
@@ -840,15 +847,38 @@ run_push_projects() {
     if [ "$SUBPACKAGES_MODE" = true ]; then
         log_info "SUBPACKAGES MODE: Will also process /packages sub-directories"
     fi
+    if [ -n "$STARTING_PROJECT" ]; then
+        log_info "STARTING PROJECT: Will skip projects until reaching '$STARTING_PROJECT'"
+    fi
 
     local start_time=$(date +%s)
     local total_projects=${#projects[@]}
     local current_project=0
+    local found_starting_project=false
+
+    # If no starting project specified, consider it "found" immediately
+    if [ -z "$STARTING_PROJECT" ]; then
+        found_starting_project=true
+    fi
 
     for project_spec in "${projects[@]}"; do
         current_project=$((current_project + 1))
 
         IFS=':' read -r project_path wait_time <<< "$project_spec"
+
+        # Get project name from path for comparison
+        local project_name=$(basename "$project_path")
+
+        # Check if this is the starting project
+        if [ "$found_starting_project" = false ]; then
+            if [ "$project_name" = "$STARTING_PROJECT" ]; then
+                found_starting_project=true
+                log_info "Found starting project: $STARTING_PROJECT"
+            else
+                log_info "Skipping $project_name (before starting project '$STARTING_PROJECT')"
+                continue
+            fi
+        fi
 
         log_info "Progress: $current_project/$total_projects"
 
@@ -870,6 +900,12 @@ run_push_projects() {
             sleep "$wait_time"
         fi
     done
+
+    # Check if starting project was found (if specified)
+    if [ -n "$STARTING_PROJECT" ] && [ "$found_starting_project" = false ]; then
+        log_error "Starting project '$STARTING_PROJECT' was not found in the projects list"
+        exit 1
+    fi
 
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
@@ -898,6 +934,10 @@ parse_args() {
                 ;;
             --projects-file)
                 PROJECTS_FILE="$2"
+                shift 2
+                ;;
+            --starting-project)
+                STARTING_PROJECT="$2"
                 shift 2
                 ;;
             *)
