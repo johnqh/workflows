@@ -432,6 +432,14 @@ async function translateObject(obj, langCode, existingTranslations = {}, path = 
     const currentPath = path ? `${path}.${key}` : key;
 
     if (typeof value === 'string') {
+      // Empty strings should stay empty - no translation needed
+      if (value === '') {
+        translatedObj[key] = '';
+        skippedCount++;
+        console.log(`  Skipped "${currentPath}" (empty string)`);
+        continue;
+      }
+
       // Check if the key already has a valid translation (non-empty string)
       const hasValidTranslation =
         existingTranslations[key] &&
