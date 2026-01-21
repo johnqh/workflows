@@ -691,6 +691,121 @@ bump_version() {
     fi
 }
 
+# Analyze changed files and generate meaningful commit message
+analyze_changes() {
+    local version="$1"
+    local force_mode="$2"
+
+    # Get all changed files (staged and unstaged)
+    local all_changes=$(git diff --name-only HEAD 2>/dev/null; git diff --name-only --cached 2>/dev/null)
+    all_changes=$(echo "$all_changes" | sort -u)
+
+    # Filter out package.json and lock files to find "real" changes
+    local code_changes=$(echo "$all_changes" | grep -v -E '^(package\.json|package-lock\.json|bun\.lock|bun\.lockb|yarn\.lock|pnpm-lock\.yaml)$' || true)
+
+    # Categorize changes
+    local src_changes=$(echo "$code_changes" | grep -E '^src/' || true)
+    local test_changes=$(echo "$code_changes" | grep -E '(\.test\.|\.spec\.|__tests__|/test/)' || true)
+    local config_changes=$(echo "$code_changes" | grep -E '^(\.eslint|\.prettier|tsconfig|vite\.config|vitest\.config|jest\.config|tailwind\.config|postcss\.config)' || true)
+    local doc_changes=$(echo "$code_changes" | grep -E '\.(md|txt|rst)$' || true)
+    local ci_changes=$(echo "$code_changes" | grep -E '^(\.github/|\.gitlab-ci|Dockerfile|docker-compose)' || true)
+
+    # Count changes by category
+    local src_count=$(echo "$src_changes" | grep -c . 2>/dev/null || echo "0")
+    local test_count=$(echo "$test_changes" | grep -c . 2>/dev/null || echo "0")
+    local config_count=$(echo "$config_changes" | grep -c . 2>/dev/null || echo "0")
+    local doc_count=$(echo "$doc_changes" | grep -c . 2>/dev/null || echo "0")
+    local ci_count=$(echo "$ci_changes" | grep -c . 2>/dev/null || echo "0")
+    local total_code_changes=$(echo "$code_changes" | grep -c . 2>/dev/null || echo "0")
+
+    # Build commit message
+    local commit_type="chore"
+    local commit_title=""
+    local commit_body=""
+
+    if [ "$force_mode" = "true" ]; then
+        commit_title="chore: force bump version to $version"
+        commit_body="- Force version bump to re-trigger CI/CD publish"
+    elif [ "$total_code_changes" -eq 0 ]; then
+        # Only dependency/version updates
+        commit_title="chore: update @sudobility dependencies and bump version to $version"
+        commit_body="- Update @sudobility dependencies to latest versions from npm"
+    else
+        # Determine the primary type of change for the commit title
+        if [ "$src_count" -gt 0 ]; then
+            # Check if it's a fix, feature, or refactor based on file patterns
+            local has_new_files=$(git diff --cached --name-status | grep -E '^A.*src/' || true)
+            if [ -n "$has_new_files" ]; then
+                commit_type="feat"
+                commit_title="feat: add new functionality and bump version to $version"
+            else
+                commit_type="refactor"
+                commit_title="refactor: update source code and bump version to $version"
+            fi
+        elif [ "$test_count" -gt 0 ] && [ "$src_count" -eq 0 ]; then
+            commit_type="test"
+            commit_title="test: update tests and bump version to $version"
+        elif [ "$config_count" -gt 0 ]; then
+            commit_title="chore: update configuration and bump version to $version"
+        elif [ "$doc_count" -gt 0 ]; then
+            commit_type="docs"
+            commit_title="docs: update documentation and bump version to $version"
+        elif [ "$ci_count" -gt 0 ]; then
+            commit_type="ci"
+            commit_title="ci: update CI/CD configuration and bump version to $version"
+        else
+            commit_title="chore: update files and bump version to $version"
+        fi
+
+        # Build detailed body with changed file summaries
+        commit_body="- Update @sudobility dependencies to latest versions from npm"
+
+        if [ "$src_count" -gt 0 ]; then
+            # List specific source files changed (up to 5)
+            local src_file_list=$(echo "$src_changes" | head -5 | sed 's/^/    - /')
+            if [ "$src_count" -gt 5 ]; then
+                src_file_list="$src_file_list
+    - ... and $((src_count - 5)) more"
+            fi
+            commit_body="$commit_body
+- Source code changes ($src_count files):
+$src_file_list"
+        fi
+
+        if [ "$test_count" -gt 0 ]; then
+            commit_body="$commit_body
+- Test updates ($test_count files)"
+        fi
+
+        if [ "$config_count" -gt 0 ]; then
+            local config_list=$(echo "$config_changes" | head -3 | tr '\n' ', ' | sed 's/,$//')
+            commit_body="$commit_body
+- Configuration changes: $config_list"
+        fi
+
+        if [ "$doc_count" -gt 0 ]; then
+            commit_body="$commit_body
+- Documentation updates ($doc_count files)"
+        fi
+
+        if [ "$ci_count" -gt 0 ]; then
+            commit_body="$commit_body
+- CI/CD updates ($ci_count files)"
+        fi
+    fi
+
+    # Append common footer
+    commit_body="$commit_body
+- All validation checks passed (lint, typecheck, tests, build)
+- Version bumped to $version
+
+Generated with push_projects.sh"
+
+    echo "$commit_title
+
+$commit_body"
+}
+
 # Commit and push changes
 commit_and_push() {
     local project_dir="$1"
@@ -708,23 +823,7 @@ commit_and_push() {
     local version=$(node -e "console.log(require('./package.json').version)" 2>/dev/null || echo "unknown")
 
     local commit_msg
-    if [ "$FORCE_MODE" = true ]; then
-        commit_msg="chore: force bump version to $version
-
-- Force version bump to re-trigger CI/CD publish
-- All validation checks passed (lint, typecheck, tests, build)
-- Version bumped to $version
-
-Generated with push_projects.sh"
-    else
-        commit_msg="chore: update @sudobility dependencies and bump version to $version
-
-- Update @sudobility dependencies to latest versions from npm
-- All validation checks passed (lint, typecheck, tests, build)
-- Version bumped to $version
-
-Generated with push_projects.sh"
-    fi
+    commit_msg=$(analyze_changes "$version" "$FORCE_MODE")
 
     if git commit -m "$commit_msg" >/dev/null 2>&1; then
         log_success "Changes committed"
