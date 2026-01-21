@@ -213,27 +213,27 @@ if [ -z "${NPM_TOKEN:-}" ]; then
     fi
 fi
 
-# Log functions
+# Log functions (using printf for portability)
 log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+    printf '%b[INFO]%b %s\n' "${BLUE}" "${NC}" "$1"
 }
 
 log_success() {
-    echo -e "${GREEN}[SUCCESS] $1${NC}"
+    printf '%b[SUCCESS] %s%b\n' "${GREEN}" "$1" "${NC}"
 }
 
 log_warning() {
-    echo -e "${ORANGE}[WARNING] $1${NC}"
+    printf '%b[WARNING] %s%b\n' "${ORANGE}" "$1" "${NC}"
 }
 
 log_error() {
-    echo -e "${RED}[ERROR] $1${NC}"
+    printf '%b[ERROR] %s%b\n' "${RED}" "$1" "${NC}"
 }
 
 log_section() {
-    echo -e "\n${BLUE}========================================${NC}"
-    echo -e "${BLUE}$1${NC}"
-    echo -e "${BLUE}========================================${NC}\n"
+    printf '\n%b========================================%b\n' "${BLUE}" "${NC}"
+    printf '%b%s%b\n' "${BLUE}" "$1" "${NC}"
+    printf '%b========================================%b\n\n' "${BLUE}" "${NC}"
 }
 
 # Show help message
