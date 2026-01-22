@@ -710,13 +710,13 @@ analyze_changes() {
     local doc_changes=$(echo "$code_changes" | grep -E '\.(md|txt|rst)$' || true)
     local ci_changes=$(echo "$code_changes" | grep -E '^(\.github/|\.gitlab-ci|Dockerfile|docker-compose)' || true)
 
-    # Count changes by category
-    local src_count=$(echo "$src_changes" | grep -c . 2>/dev/null || echo "0")
-    local test_count=$(echo "$test_changes" | grep -c . 2>/dev/null || echo "0")
-    local config_count=$(echo "$config_changes" | grep -c . 2>/dev/null || echo "0")
-    local doc_count=$(echo "$doc_changes" | grep -c . 2>/dev/null || echo "0")
-    local ci_count=$(echo "$ci_changes" | grep -c . 2>/dev/null || echo "0")
-    local total_code_changes=$(echo "$code_changes" | grep -c . 2>/dev/null || echo "0")
+    # Count changes by category (grep -c always outputs a number, use fallback for empty)
+    local src_count=$(echo "$src_changes" | grep -c . 2>/dev/null); src_count=${src_count:-0}
+    local test_count=$(echo "$test_changes" | grep -c . 2>/dev/null); test_count=${test_count:-0}
+    local config_count=$(echo "$config_changes" | grep -c . 2>/dev/null); config_count=${config_count:-0}
+    local doc_count=$(echo "$doc_changes" | grep -c . 2>/dev/null); doc_count=${doc_count:-0}
+    local ci_count=$(echo "$ci_changes" | grep -c . 2>/dev/null); ci_count=${ci_count:-0}
+    local total_code_changes=$(echo "$code_changes" | grep -c . 2>/dev/null); total_code_changes=${total_code_changes:-0}
 
     # Build commit message
     local commit_type="chore"
