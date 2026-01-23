@@ -367,8 +367,8 @@ update_sudobility_deps() {
             local latest_version=$(get_latest_version "$package")
 
             if [ -z "$latest_version" ]; then
-                log_warning "Could not fetch latest version for $package"
-                continue
+                log_error "Failed to fetch latest version for $package from npm"
+                return 2
             fi
 
             local current_clean=$(echo "$current_version" | sed 's/^[\^~]//')
@@ -410,8 +410,8 @@ update_sudobility_deps() {
             local latest_version=$(get_latest_version "$package")
 
             if [ -z "$latest_version" ]; then
-                log_warning "Could not fetch latest version for $package (peer)"
-                continue
+                log_error "Failed to fetch latest version for $package (peer) from npm"
+                return 2
             fi
 
             local current_clean=$(echo "$current_version" | sed 's/^[\^~]//')
@@ -654,7 +654,12 @@ process_subpackages() {
         }
 
         log_info "  Updating @sudobility dependencies..."
-        update_sudobility_deps "$subpackage_dir" || true
+        local subpkg_update_result=0
+        update_sudobility_deps "$subpackage_dir" || subpkg_update_result=$?
+        if [ "$subpkg_update_result" -eq 2 ]; then
+            log_error "Failed to fetch @sudobility package from npm for sub-package $subpackage_name, stopping"
+            return 1
+        fi
 
         if ! validate_subpackage "$subpackage_dir"; then
             log_error "Validation failed for sub-package: $subpackage_name"
@@ -871,7 +876,12 @@ process_project() {
     detect_package_manager "$project_path"
 
     log_info "Updating @sudobility dependencies to latest..."
-    update_sudobility_deps "$project_path" || true
+    local update_result=0
+    update_sudobility_deps "$project_path" || update_result=$?
+    if [ "$update_result" -eq 2 ]; then
+        log_error "Failed to fetch @sudobility package from npm, stopping"
+        return 1
+    fi
 
     if [ "$SUBPACKAGES_MODE" = true ]; then
         if ! process_subpackages "$project_path"; then
