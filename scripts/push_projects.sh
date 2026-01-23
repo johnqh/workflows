@@ -838,13 +838,19 @@ commit_and_push() {
     fi
 
     log_info "Pushing to remote..."
-    if git push 2>&1 | grep -v "Everything up-to-date"; then
-        log_success "Changes pushed to remote"
-    else
-        log_error "Failed to push changes"
+    local push_output
+    push_output=$(git push 2>&1)
+    local push_exit_code=$?
+
+    # Show output (filter out "Everything up-to-date" noise)
+    echo "$push_output" | grep -v "Everything up-to-date" || true
+
+    if [ "$push_exit_code" -ne 0 ]; then
+        log_error "Failed to push changes (exit code: $push_exit_code)"
         return 1
     fi
 
+    log_success "Changes pushed to remote"
     return 0
 }
 
