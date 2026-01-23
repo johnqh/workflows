@@ -903,7 +903,7 @@ process_project() {
 
     if [ "$has_changes" = false ] && [ "$FORCE_MODE" = false ]; then
         log_info "No changes detected in $project_name, skipping"
-        return 0
+        return 2  # Return 2 to indicate "skipped, no changes"
     fi
 
     if [ "$FORCE_MODE" = true ] && [ "$has_changes" = false ]; then
@@ -964,6 +964,7 @@ run_push_projects() {
     local total_projects=${#projects[@]}
     local current_project=0
     local found_starting_project=false
+    local changes_counter=0  # Counter for projects with changes
 
     # If no starting project specified, consider it "found" immediately
     if [ -z "$STARTING_PROJECT" ]; then
@@ -998,15 +999,27 @@ run_push_projects() {
             exit 1
         fi
 
-        if ! process_project "$abs_path"; then
+        local process_result=0
+        process_project "$abs_path" || process_result=$?
+
+        if [ "$process_result" -eq 1 ]; then
             log_error "Failed to process $(basename "$abs_path")"
             log_error "Stopping execution"
             exit 1
+        elif [ "$process_result" -eq 0 ]; then
+            # Project had changes and was committed
+            changes_counter=$((changes_counter + 1))
         fi
+        # process_result=2 means skipped (no changes), counter stays the same
 
         if [ "$wait_time" -gt 0 ]; then
-            log_info "Waiting $wait_time seconds before next project..."
-            sleep "$wait_time"
+            if [ "$changes_counter" -gt 0 ]; then
+                log_info "Waiting $wait_time seconds for npm registry to update ($changes_counter project(s) published)..."
+                sleep "$wait_time"
+                changes_counter=0  # Reset counter after waiting
+            else
+                log_info "No changes published, skipping wait"
+            fi
         fi
     done
 
