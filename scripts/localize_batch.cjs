@@ -41,14 +41,14 @@ function printUsage() {
   console.error('Options:');
   console.error('  --api-key <key>    API key for Bearer auth (or set WHISPERLY_API_KEY env var)');
   console.error('  --env <file>       Path to .env file');
-  console.error('  --batch-limit <n>  Max translations per API call (strings × languages, default: 400)');
+  console.error('  --batch-limit <n>  Max translations per API call (strings × languages, default: 200)');
 }
 
 let localesDir = null;
 let endpointUrl = null;
 let apiKey = null;
 let envFile = null;
-let batchLimit = 400;
+let batchLimit = 200;
 
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
@@ -232,6 +232,10 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function translateBatch(strings, targetLangs, retryCount = 0) {
   const maxRetries = 3;
   try {
+    const payload = { strings, target_languages: targetLangs };
+    console.log(`  Request: ${strings.length} string(s) → [${targetLangs.join(', ')}]`);
+    console.log(`  Strings: ${JSON.stringify(strings.length <= 5 ? strings : [...strings.slice(0, 5), `... +${strings.length - 5} more`])}`);
+
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 120000);
 
@@ -241,7 +245,7 @@ async function translateBatch(strings, targetLangs, retryCount = 0) {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ strings, target_languages: targetLangs }),
+      body: JSON.stringify(payload),
       signal: controller.signal,
     });
 
@@ -252,6 +256,7 @@ async function translateBatch(strings, targetLangs, retryCount = 0) {
     }
 
     const data = await response.json();
+    console.log(`  Response: success=${data.success}, languages=${Object.keys(data.data?.translations || {}).join(', ')}`);
 
     if (!data.success) {
       throw new Error(`API returned success=false: ${JSON.stringify(data)}`);
