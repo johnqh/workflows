@@ -26,8 +26,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const axios = require('axios');
-const dotenv = require('dotenv');
 
 // --- CLI Argument Parsing ---
 
@@ -86,18 +84,26 @@ if (!fs.existsSync(localesDir)) {
 
 // --- Environment Setup ---
 
-const callerEnvPath = path.join(process.cwd(), '.env');
-const callerEnvLocalPath = path.join(process.cwd(), '.env.local');
+function loadEnvFile(filePath) {
+  if (!fs.existsSync(filePath)) return;
+  const content = fs.readFileSync(filePath, 'utf8');
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx === -1) continue;
+    const key = trimmed.slice(0, eqIdx).trim();
+    let val = trimmed.slice(eqIdx + 1).trim();
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1);
+    }
+    process.env[key] = val;
+  }
+}
 
-if (fs.existsSync(callerEnvPath)) {
-  dotenv.config({ path: callerEnvPath });
-}
-if (fs.existsSync(callerEnvLocalPath)) {
-  dotenv.config({ path: callerEnvLocalPath, override: true });
-}
-if (envFile && fs.existsSync(envFile)) {
-  dotenv.config({ path: envFile, override: true });
-}
+loadEnvFile(path.join(process.cwd(), '.env'));
+loadEnvFile(path.join(process.cwd(), '.env.local'));
+if (envFile) loadEnvFile(envFile);
 
 if (!apiKey) apiKey = process.env.WHISPERLY_API_KEY;
 if (!apiKey) {
@@ -226,23 +232,32 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function translateBatch(strings, targetLangs, retryCount = 0) {
   const maxRetries = 3;
   try {
-    const response = await axios.post(
-      endpointUrl,
-      { strings, target_languages: targetLangs },
-      {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        timeout: 120000,
-      }
-    );
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120000);
 
-    if (!response.data.success) {
-      throw new Error(`API returned success=false: ${JSON.stringify(response.data)}`);
+    const response = await fetch(endpointUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ strings, target_languages: targetLangs }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${await response.text()}`);
     }
 
-    return response.data.data.translations;
+    const data = await response.json();
+
+    if (!data.success) {
+      throw new Error(`API returned success=false: ${JSON.stringify(data)}`);
+    }
+
+    return data.data.translations;
   } catch (error) {
     if (retryCount < maxRetries) {
       const waitSec = (retryCount + 1) * 3;
