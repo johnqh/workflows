@@ -233,8 +233,12 @@ async function translateBatch(strings, targetLangs, retryCount = 0) {
   const maxRetries = 3;
   try {
     const payload = { strings, target_languages: targetLangs };
-    console.log(`  Request: ${strings.length} string(s) → [${targetLangs.join(', ')}]`);
-    console.log(`  Strings: ${JSON.stringify(strings.length <= 5 ? strings : [...strings.slice(0, 5), `... +${strings.length - 5} more`])}`);
+    const payloadJson = JSON.stringify(payload);
+    const curlCmd = `curl -X POST '${endpointUrl}' \\\n` +
+      `  -H 'Authorization: Bearer ${apiKey}' \\\n` +
+      `  -H 'Content-Type: application/json' \\\n` +
+      `  -d '${payloadJson.replace(/'/g, "'\\''")}'`;
+    console.log(`  cURL:\n${curlCmd}`);
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 120000);
@@ -256,7 +260,7 @@ async function translateBatch(strings, targetLangs, retryCount = 0) {
     }
 
     const data = await response.json();
-    console.log(`  Response: success=${data.success}, languages=${Object.keys(data.data?.translations || {}).join(', ')}`);
+    console.log(`  Response: success=${data.success}, languages=[${Object.keys(data.data?.translations || {}).join(', ')}]`);
 
     if (!data.success) {
       throw new Error(`API returned success=false: ${JSON.stringify(data)}`);
