@@ -240,6 +240,7 @@ async function translateBatch(strings, targetLangs, retryCount = 0) {
       `  -d '${payloadJson.replace(/'/g, "'\\''")}'`;
     console.log(`  cURL:\n${curlCmd}`);
 
+    const startTime = Date.now();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 120000);
 
@@ -260,7 +261,8 @@ async function translateBatch(strings, targetLangs, retryCount = 0) {
     }
 
     const data = await response.json();
-    console.log(`  Response: success=${data.success}, languages=[${Object.keys(data.data?.translations || {}).join(', ')}]`);
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`  Response: success=${data.success}, languages=[${Object.keys(data.data?.translations || {}).join(', ')}] (${elapsed}s)`);
 
     if (!data.success) {
       throw new Error(`API returned success=false: ${JSON.stringify(data)}`);
