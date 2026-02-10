@@ -41,14 +41,14 @@ function printUsage() {
   console.error('Options:');
   console.error('  --api-key <key>    API key for Bearer auth (or set WHISPERLY_API_KEY env var)');
   console.error('  --env <file>       Path to .env file');
-  console.error('  --batch-limit <n>  Max translations per API call (strings × languages, default: 200)');
+  console.error('  --batch-limit <n>  Max translations per API call (strings × languages, default: 100)');
 }
 
 let localesDir = null;
 let endpointUrl = null;
 let apiKey = null;
 let envFile = null;
-let batchLimit = 200;
+let batchLimit = 100;
 
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
