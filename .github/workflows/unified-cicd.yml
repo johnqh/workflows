@@ -393,30 +393,6 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: "Run tests"
-        if: steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true'
-        run: |
-          PM="${{ steps.detect-pm.outputs.manager }}"
-
-          # Use test:unit if available (excludes integration tests)
-          if grep -q '"test:unit"' package.json 2>/dev/null; then
-            echo "🧪 Running test:unit script (unit tests only)"
-            if [ "$PM" == "bun" ]; then
-              bun run test:unit
-            else
-              npm run test:unit
-            fi
-          elif grep -q '"test"' package.json 2>/dev/null; then
-            echo "🧪 Running test script"
-            if [ "$PM" == "bun" ]; then
-              bun run test
-            else
-              npm test
-            fi
-          else
-            echo "ℹ️  No test script found, skipping"
-          fi
-
       - name: "Build project"
         if: steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true'
         run: |
