@@ -12,7 +12,14 @@
       "Bash(for:*)",
       "Bash(do npx js-yaml \"$f\")",
       "Bash(done)",
-      "Bash(bash -n:*)"
+      "Bash(bash -n:*)",
+      "Bash(node -c:*)",
+      "Bash(grep:*)",
+      "Bash(ls:*)",
+      "Bash(curl:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nfix: reduce batch limit to 200 and log API requests/responses\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git push:*)"
     ],
     "deny": [],
     "ask": []
