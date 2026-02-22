@@ -398,16 +398,23 @@ jobs:
         run: |
           PM="${{ steps.detect-pm.outputs.manager }}"
 
-          if ! grep -q '"test"' package.json 2>/dev/null; then
-            echo "ℹ️  No test script found, skipping"
-            exit 0
-          fi
-
-          echo "🧪 Running tests"
-          if [ "$PM" == "bun" ]; then
-            bun run test
+          # Use test:unit if available (excludes integration tests)
+          if grep -q '"test:unit"' package.json 2>/dev/null; then
+            echo "🧪 Running test:unit script (unit tests only)"
+            if [ "$PM" == "bun" ]; then
+              bun run test:unit
+            else
+              npm run test:unit
+            fi
+          elif grep -q '"test"' package.json 2>/dev/null; then
+            echo "🧪 Running test script"
+            if [ "$PM" == "bun" ]; then
+              bun run test
+            else
+              npm test
+            fi
           else
-            npm test
+            echo "ℹ️  No test script found, skipping"
           fi
 
       - name: "Build project"
