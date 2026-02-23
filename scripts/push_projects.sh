@@ -992,7 +992,7 @@ run_push_projects() {
     shift
     local projects=("$@")
 
-    log_section "Starting Multi-Project Update and Release Process"
+    log_section "Starting Multi-Project Update and Release Process (v$PUSH_PROJECTS_VERSION)"
     if [ "$FORCE_MODE" = true ]; then
         log_warning "FORCE MODE: Will bump version on ALL projects regardless of changes"
     else
@@ -1064,7 +1064,7 @@ run_push_projects() {
                 FAILED_REASONS+=("Validation, build, or push failed")
             else
                 log_error "Failed to process $(basename "$abs_path")"
-                log_error "Stopping execution"
+                log_error "Stopping execution (push_projects.sh v$PUSH_PROJECTS_VERSION)"
                 exit 1
             fi
         elif [ "$process_result" -eq 0 ]; then
