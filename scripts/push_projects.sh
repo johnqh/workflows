@@ -18,11 +18,12 @@
 #   ./push_projects.sh --projects-file ./projects.txt
 #
 # Command line options:
-#   --force, -f         Force version bump on all projects even without changes
-#   --subpackages, -s   Also process sub-packages in /packages directories
-#   --projects-file     Read projects from a file (one per line, format: path:delay)
-#   --help, -h          Show help message
-#   --starting-project  Skip projects until reaching the specified project name
+#   --force, -f              Force version bump on all projects even without changes
+#   --subpackages, -s        Also process sub-packages in /packages directories
+#   --projects-file          Read projects from a file (one per line, format: path:delay)
+#   --help, -h               Show help message
+#   --starting-project       Skip projects until reaching the specified project name
+#   --continue-on-error, -c  Log failures and continue to the next project
 
 set -e  # Exit on error
 set -u  # Exit on undefined variable
@@ -41,8 +42,13 @@ NC='\033[0m' # No Color
 # Global flags
 FORCE_MODE=false
 SUBPACKAGES_MODE=false
+CONTINUE_ON_ERROR=false
 PROJECTS_FILE=""
 STARTING_PROJECT=""
+
+# Failure tracking (used with --continue-on-error)
+declare -a FAILED_PROJECTS=()
+declare -a FAILED_REASONS=()
 
 # Package manager for current project (detected per-project)
 PKG_MANAGER=""
@@ -273,11 +279,13 @@ SUPPORTED PACKAGE MANAGERS:
     - npm   (detected via package-lock.json, or as default)
 
 OPTIONS:
-    --force, -f           Force version bump on all projects even without changes
-    --subpackages, -s     Also process sub-packages in /packages directories
-    --projects-file       Read projects from a file (one per line, format: path:delay)
-    --starting-project    Skip projects until reaching the specified project name
-    --help, -h            Show this help message
+    --force, -f              Force version bump on all projects even without changes
+    --subpackages, -s        Also process sub-packages in /packages directories
+    --projects-file          Read projects from a file (one per line, format: path:delay)
+    --starting-project       Skip projects until reaching the specified project name
+    --continue-on-error, -c  Log failures and continue to the next project.
+                             Collects all failures and prints a summary at the end.
+    --help, -h               Show this help message
 
 EXAMPLES:
     # In your push_all.sh:
@@ -290,6 +298,9 @@ EXAMPLES:
     # Skip projects until reaching a specific one:
     ./push_projects.sh --projects-file ./projects.txt --starting-project lib
     # If projects are [types, lib, app], this skips types and starts from lib
+
+    # Continue processing even if some projects fail:
+    ./push_projects.sh --projects-file ./projects.txt --continue-on-error
 
 EOF
     exit 0
@@ -986,6 +997,9 @@ run_push_projects() {
     if [ "$SUBPACKAGES_MODE" = true ]; then
         log_info "SUBPACKAGES MODE: Will also process /packages sub-directories"
     fi
+    if [ "$CONTINUE_ON_ERROR" = true ]; then
+        log_info "CONTINUE ON ERROR: Will log failures and continue to next project"
+    fi
     if [ -n "$STARTING_PROJECT" ]; then
         log_info "STARTING PROJECT: Will skip projects until reaching '$STARTING_PROJECT'"
     fi
@@ -1025,17 +1039,30 @@ run_push_projects() {
         local abs_path="$(cd "$base_dir" && cd "$project_path" 2>/dev/null && pwd)"
 
         if [ -z "$abs_path" ]; then
-            log_error "Failed to resolve path: $project_path"
-            exit 1
+            if [ "$CONTINUE_ON_ERROR" = true ]; then
+                log_error "Failed to resolve path: $project_path - continuing to next project"
+                FAILED_PROJECTS+=("$project_path")
+                FAILED_REASONS+=("Failed to resolve path")
+                continue
+            else
+                log_error "Failed to resolve path: $project_path"
+                exit 1
+            fi
         fi
 
         local process_result=0
         process_project "$abs_path" || process_result=$?
 
         if [ "$process_result" -eq 1 ]; then
-            log_error "Failed to process $(basename "$abs_path")"
-            log_error "Stopping execution"
-            exit 1
+            if [ "$CONTINUE_ON_ERROR" = true ]; then
+                log_error "Failed to process $(basename "$abs_path") - continuing to next project"
+                FAILED_PROJECTS+=("$(basename "$abs_path")")
+                FAILED_REASONS+=("Validation, build, or push failed")
+            else
+                log_error "Failed to process $(basename "$abs_path")"
+                log_error "Stopping execution"
+                exit 1
+            fi
         elif [ "$process_result" -eq 0 ]; then
             # Project had changes and was committed
             changes_counter=$((changes_counter + 1))
@@ -1064,6 +1091,19 @@ run_push_projects() {
     local minutes=$((duration / 60))
     local seconds=$((duration % 60))
 
+    # Print failure summary if there were failures in continue-on-error mode
+    if [ "$CONTINUE_ON_ERROR" = true ] && [ ${#FAILED_PROJECTS[@]} -gt 0 ]; then
+        log_section "Failure Summary"
+        log_error "${#FAILED_PROJECTS[@]} project(s) failed:"
+        for i in "${!FAILED_PROJECTS[@]}"; do
+            log_error "  - ${FAILED_PROJECTS[$i]}: ${FAILED_REASONS[$i]}"
+        done
+        echo ""
+        log_warning "Total time: ${minutes}m ${seconds}s"
+        log_warning "Completed with ${#FAILED_PROJECTS[@]} failure(s)"
+        exit 1
+    fi
+
     log_section "All Projects Processed Successfully!"
     log_success "Total time: ${minutes}m ${seconds}s"
     log_success "All projects updated, validated, versioned, and pushed"
@@ -1082,6 +1122,10 @@ parse_args() {
                 ;;
             --subpackages|-s)
                 SUBPACKAGES_MODE=true
+                shift
+                ;;
+            --continue-on-error|-c)
+                CONTINUE_ON_ERROR=true
                 shift
                 ;;
             --projects-file)

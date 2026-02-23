@@ -21,8 +21,10 @@ workflows/
 │   ├── localize.cjs                  # LLM-first i18n translation (LM Studio + DeepL fallback)
 │   ├── localize_batch.cjs            # Batch translation via Whisperly API
 │   ├── push_projects.sh              # Multi-project dependency update, validate, bump, push
+│   ├── lint-workflows.sh             # actionlint runner for workflow YAML validation
 │   └── svg/
 │       ├── SVG.md                    # Documentation for SVG scripts
+│       ├── requirements.txt          # Python dependencies for vectorization scripts
 │       ├── generate_logo_svg.py      # Programmatic SVG logo generator (Sudobility S-grid)
 │       ├── vectorize_logo.py         # SLIC superpixel PNG-to-SVG vectorizer
 │       ├── vectorize_quantized.py    # K-means color quantization PNG-to-SVG vectorizer
@@ -34,6 +36,7 @@ workflows/
 │   └── webapp-cloudflare.yml         # Example: Cloudflare Pages web app (mail_box)
 ├── docs/
 │   └── DEPLOYMENT.md                 # Step-by-step secret configuration for all providers
+├── Makefile                          # Make targets: lint-workflows, help
 ├── test-workflows-locally.sh         # Local CI/CD test runner for all ecosystem projects
 ├── package.json
 ├── bun.lock / package-lock.json
@@ -94,8 +97,9 @@ A single reusable `workflow_call` that every ecosystem project references. Conta
 Translates i18n JSON locale files from English (`en/`) to 15 target languages (ar, de, es, fr, it, ja, ko, pt, ru, sv, th, uk, vi, zh, zh-hant).
 
 **Dual translation strategy:**
-1. **Primary**: LM Studio local LLM (OpenAI-compatible API). Anti-hallucination safeguards: 3.0x length ratio check, max 500 tokens, temperature 0.1, 3 retries.
+1. **Primary**: LM Studio local LLM (OpenAI-compatible API). Anti-hallucination safeguards: configurable length ratio check (`--max-length-ratio`, default 3.0), configurable max tokens (`--max-tokens`, default 500), temperature 0.1, configurable retries (`--max-retries`, default 3).
 2. **Fallback**: DeepL API with XML tag handling for placeholders.
+3. **Both fail**: Keeps original English text and logs at WARN level with the key name and target language.
 
 **Preservation**: Wraps `{placeholders}`, `{{double}}`, brand names (MetaMask, Phantom, WalletConnect, etc.), technical terms (Web3, DApp, NFT, DAO, DeFi, ENS, SNS), domain names, ISO 8601 strings, and `.box` TLD in `<xx>` tags to prevent translation.
 
@@ -119,7 +123,7 @@ Multi-project orchestration for the 0xmail ecosystem. Can be sourced or run dire
 
 **Per-project pipeline:** detect PM, update `@sudobility/*` deps to latest, optionally process sub-packages, check for changes, validate (typecheck/lint/test/build), bump patch version, update lockfile, generate descriptive commit message, commit and push.
 
-**Flags**: `--force`/`-f`, `--subpackages`/`-s`, `--projects-file`, `--starting-project`, `--help`/`-h`. Project spec format: `path:delay_seconds`.
+**Flags**: `--force`/`-f`, `--subpackages`/`-s`, `--continue-on-error`/`-c`, `--projects-file`, `--starting-project`, `--help`/`-h`. Project spec format: `path:delay_seconds`.
 
 ### SVG Utilities (`scripts/svg/`)
 
@@ -135,10 +139,15 @@ Runs CI steps locally for all ecosystem projects. Projects: `design_system` (pub
 ## Development Commands
 
 ```bash
+# Validate workflow YAML files with actionlint
+make lint-workflows
+./scripts/lint-workflows.sh
+
 # Localization (LM Studio + DeepL fallback)
 node scripts/localize.cjs ./public/locales
 node scripts/localize.cjs ./public/locales --llm-host 192.168.1.100 --llm-port 8080
 node scripts/localize.cjs ./public/locales --env ./.env.local
+node scripts/localize.cjs ./public/locales --max-length-ratio 4.0 --max-tokens 800 --max-retries 5
 
 # Batch localization (Whisperly API)
 node scripts/localize_batch.cjs ./public/locales https://api.whisperly.dev/.../translate --api-key wh_xxx
@@ -149,6 +158,7 @@ node scripts/localize_batch.cjs ./public/locales https://api.whisperly.dev/.../t
 # Push all projects
 bash scripts/push_projects.sh --projects-file ./projects.txt
 bash scripts/push_projects.sh --projects-file ./projects.txt --force --subpackages
+bash scripts/push_projects.sh --projects-file ./projects.txt --continue-on-error
 
 # Install dependencies for this repo
 bun install   # or: npm install
@@ -267,7 +277,7 @@ Use a tag instead of `@main`: `uses: johnqh/workflows/.github/workflows/unified-
 
 ### Python (SVG scripts, not in package.json)
 
-`opencv-python`, `numpy`, `scipy`, `scikit-image`, `scikit-learn` for vectorization scripts. `vtracer` (Rust CLI, `cargo install vtracer`) and `rsvg-convert` (system CLI) for rendering.
+`opencv-python`, `numpy`, `scipy`, `scikit-image`, `scikit-learn` for vectorization scripts (see `scripts/svg/requirements.txt`). `vtracer` (Rust CLI, `cargo install vtracer`) and `rsvg-convert` (system CLI) for rendering. Install Python deps with: `pip install -r scripts/svg/requirements.txt`.
 
 ### Ecosystem Projects
 

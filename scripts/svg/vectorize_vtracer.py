@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Dependencies: see scripts/svg/requirements.txt (also requires: vtracer via cargo install vtracer)
 """Vectorize a PNG logo to SVG using vtracer (bitmap trace).
 
 Produces clean, compact SVGs with good color fidelity.

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Dependencies: see scripts/svg/requirements.txt
 """Vectorize a low-poly style PNG logo into clean SVG polygons.
 
 v3 — Full quality pipeline:

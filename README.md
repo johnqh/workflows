@@ -385,6 +385,64 @@ secrets:
 - Warning messages are shown but don't fail the build
 - Add the scripts to `package.json` to enable checks
 
+## Workflow Validation
+
+### actionlint
+
+Use [actionlint](https://github.com/rhysd/actionlint) to validate workflow YAML files before pushing:
+
+```bash
+# Via Makefile
+make lint-workflows
+
+# Or directly
+./scripts/lint-workflows.sh
+```
+
+If `actionlint` is not installed, the script will provide installation instructions. Install it with:
+
+```bash
+# macOS
+brew install actionlint
+
+# Linux (Go)
+go install github.com/rhysd/actionlint/cmd/actionlint@latest
+```
+
+## Version Pinning
+
+Consuming projects can pin to a specific version of the workflows to avoid breaking changes from upstream updates.
+
+### Available Versions
+
+| Tag | Description |
+|-----|-------------|
+| `@v1` | Latest v1.x release (recommended for most projects) |
+| `@v1.0.0` | Exact version pin |
+| `@main` | Latest development (not recommended for production) |
+
+### How to Pin
+
+Use a version tag instead of `@main`:
+
+```yaml
+# Recommended: pin to major version (gets non-breaking updates)
+uses: johnqh/workflows/.github/workflows/unified-cicd.yml@v1
+
+# Exact pin (maximum stability)
+uses: johnqh/workflows/.github/workflows/unified-cicd.yml@v1.0.0
+
+# Latest (not recommended for production)
+uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
+```
+
+### Upgrading
+
+When a new major version is released:
+1. Review the changelog for breaking changes
+2. Update the version tag in your workflow file
+3. Test with a PR before merging
+
 ## Updating the Workflow
 
 To update all projects to use the latest workflow version:

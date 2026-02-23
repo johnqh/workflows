@@ -1,0 +1,7 @@
+# Python dependencies for SVG vectorization scripts
+# Install with: pip install -r requirements.txt
+opencv-python
+numpy
+scipy
+scikit-image
+scikit-learn

@@ -25,7 +25,7 @@ permissions:
 
 jobs:
   cicd:
-    uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
+    uses: johnqh/workflows/.github/workflows/unified-cicd.yml@v1
     with:
       docker-image-name: "mail_box_indexer"  # Change to your Docker image name
       skip-npm-publish: true  # Set to true if this is an app, not an NPM library

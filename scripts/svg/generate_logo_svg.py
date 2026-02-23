@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Dependencies: none (stdlib only). For other SVG scripts, see scripts/svg/requirements.txt
 """Generate Sudobility logo as SVG."""
 import math
 

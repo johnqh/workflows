@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Dependencies: see scripts/svg/requirements.txt
 """Vectorize a PNG logo using color quantization + per-layer tracing.
 
 Approach:

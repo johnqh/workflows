@@ -4,12 +4,68 @@ This guide explains how to configure secrets for each deployment option in the u
 
 ## Table of Contents
 
+- [Version Pinning](#version-pinning)
 - [NPM Registry](#npm-registry)
 - [Docker Hub](#docker-hub)
 - [Cloudflare Pages](#cloudflare-pages)
 - [Railway](#railway)
 - [Vercel](#vercel)
 - [Build Environment Variables](#build-environment-variables)
+
+---
+
+## Version Pinning
+
+Consuming projects reference the unified workflow via a Git ref (branch or tag). Pinning to a versioned tag prevents unexpected breakage when `main` is updated.
+
+### Recommended: Pin to Major Version
+
+Use the `@v1` tag to receive non-breaking updates (bug fixes, new optional features) while avoiding breaking changes:
+
+```yaml
+jobs:
+  cicd:
+    uses: johnqh/workflows/.github/workflows/unified-cicd.yml@v1
+```
+
+### Exact Version Pin
+
+For maximum stability (e.g., regulated environments), pin to an exact version:
+
+```yaml
+jobs:
+  cicd:
+    uses: johnqh/workflows/.github/workflows/unified-cicd.yml@v1.0.0
+```
+
+### Available Tags
+
+| Tag | Points To | Use Case |
+|-----|-----------|----------|
+| `v1` | Latest v1.x.x release | Recommended for most projects |
+| `v1.0.0` | Exact commit | Maximum stability |
+| `main` | Latest commit on main | Development/testing only |
+
+### Versioning Policy
+
+- **Patch** (v1.0.x): Bug fixes, documentation updates, non-functional changes
+- **Minor** (v1.x.0): New optional inputs, new deployment targets, new features that don't affect existing behavior
+- **Major** (vX.0.0): Breaking changes such as renamed secrets, removed inputs, changed job conditions, or restructured outputs
+
+### Upgrading
+
+1. Check the [releases](https://github.com/johnqh/workflows/releases) for a changelog
+2. Update the version tag in your `.github/workflows/ci-cd.yml`
+3. Open a PR to test the new version before merging to `main`
+
+### Migration from @main
+
+If you are currently using `@main`, switch to `@v1` for stability:
+
+```diff
+-    uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
++    uses: johnqh/workflows/.github/workflows/unified-cicd.yml@v1
+```
 
 ---
 

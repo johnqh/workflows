@@ -9,15 +9,19 @@
  *   locales-dir  Path to the locales directory (e.g., ./public/locales)
  *
  * Options:
- *   --llm-host <host>  LLM server host/IP (default: localhost)
- *   --llm-port <port>  LLM server port (default: 1234)
- *   --env <file>       Path to .env file
+ *   --llm-host <host>          LLM server host/IP (default: localhost)
+ *   --llm-port <port>          LLM server port (default: 1234)
+ *   --env <file>               Path to .env file
+ *   --max-length-ratio <n>     Max translation/original length ratio before hallucination fallback (default: 3.0)
+ *   --max-tokens <n>           Max tokens for LLM response (default: 500)
+ *   --max-retries <n>          Max retry attempts for LLM translation (default: 3)
  *
  * Example:
  *   node ../workflows/scripts/localize.cjs ./public/locales
  *   node ../workflows/scripts/localize.cjs ./public/locales --llm-host 192.168.1.100
  *   node ../workflows/scripts/localize.cjs ./public/locales --llm-host 192.168.1.100 --llm-port 8080
  *   node ../workflows/scripts/localize.cjs ./public/locales --env ./.env.local
+ *   node ../workflows/scripts/localize.cjs ./public/locales --max-length-ratio 4.0 --max-tokens 800 --max-retries 5
  */
 
 const fs = require('fs');
@@ -32,16 +36,22 @@ function printUsage() {
   console.error('Usage: node localize.cjs <locales-dir> [options]');
   console.error('');
   console.error('Arguments:');
-  console.error('  locales-dir        Path to the locales directory (e.g., ./public/locales)');
+  console.error('  locales-dir                  Path to the locales directory (e.g., ./public/locales)');
   console.error('');
   console.error('Options:');
-  console.error('  --llm-host <host>  LLM server host/IP (default: localhost)');
-  console.error('  --llm-port <port>  LLM server port (default: 1234)');
-  console.error('  --env <file>       Path to .env file');
+  console.error('  --llm-host <host>            LLM server host/IP (default: localhost)');
+  console.error('  --llm-port <port>            LLM server port (default: 1234)');
+  console.error('  --env <file>                 Path to .env file');
+  console.error('  --max-length-ratio <number>  Max translation/original length ratio (default: 3.0)');
+  console.error('                               Translations exceeding this ratio are treated as hallucinations.');
+  console.error('                               CJK languages may need a lower ratio; Latin-script a higher one.');
+  console.error('  --max-tokens <number>        Max tokens for LLM response (default: 500)');
+  console.error('  --max-retries <number>       Max retry attempts for LLM translation (default: 3)');
   console.error('');
   console.error('Example:');
   console.error('  node ../workflows/scripts/localize.cjs ./public/locales');
   console.error('  node ../workflows/scripts/localize.cjs ./public/locales --llm-host 192.168.1.100');
+  console.error('  node ../workflows/scripts/localize.cjs ./public/locales --max-length-ratio 4.0 --max-tokens 800');
 }
 
 // Parse options
@@ -49,6 +59,9 @@ let localesDir = null;
 let envFile = null;
 let llmHost = 'localhost';
 let llmPort = '1234';
+let maxLengthRatio = 3.0;
+let maxTokens = 500;
+let maxRetries = 3;
 
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
@@ -58,6 +71,27 @@ for (let i = 0; i < args.length; i++) {
     llmPort = args[++i];
   } else if (arg === '--env' && args[i + 1]) {
     envFile = path.resolve(process.cwd(), args[++i]);
+  } else if (arg === '--max-length-ratio' && args[i + 1]) {
+    maxLengthRatio = parseFloat(args[++i]);
+    if (isNaN(maxLengthRatio) || maxLengthRatio <= 0) {
+      console.error('Error: --max-length-ratio must be a positive number');
+      process.exit(1);
+    }
+  } else if (arg === '--max-tokens' && args[i + 1]) {
+    maxTokens = parseInt(args[++i], 10);
+    if (isNaN(maxTokens) || maxTokens <= 0) {
+      console.error('Error: --max-tokens must be a positive integer');
+      process.exit(1);
+    }
+  } else if (arg === '--max-retries' && args[i + 1]) {
+    maxRetries = parseInt(args[++i], 10);
+    if (isNaN(maxRetries) || maxRetries < 0) {
+      console.error('Error: --max-retries must be a non-negative integer');
+      process.exit(1);
+    }
+  } else if (arg === '--help' || arg === '-h') {
+    printUsage();
+    process.exit(0);
   } else if (arg.startsWith('--')) {
     console.error(`Unknown option: ${arg}`);
     printUsage();
@@ -110,6 +144,9 @@ console.log('='.repeat(60));
 console.log(`Source directory: ${sourceDir}`);
 console.log(`Target base directory: ${targetBaseDir}`);
 console.log(`LLM server: ${llmHost}:${llmPort}`);
+console.log(`Max length ratio: ${maxLengthRatio}`);
+console.log(`Max tokens: ${maxTokens}`);
+console.log(`Max retries: ${maxRetries}`);
 console.log('='.repeat(60));
 
 // List of target languages and their directory names
@@ -168,7 +205,6 @@ const languageNames = {
 
 // Function to translate using LM Studio - handles both simple and complex strings
 async function translateWithLMStudio(text, langCode, retryCount = 0) {
-  const maxRetries = 3;
   const targetLanguage = languageNames[langCode] || langCode;
 
   console.log(`\n  LM Studio Translation to ${targetLanguage}:`);
@@ -202,7 +238,7 @@ Output: The phrase translated to ${targetLanguage}, keeping <xx>MetaMask</xx> un
         },
       ],
       temperature: 0.1,
-      max_tokens: 500, // Reduced from 2000 to prevent hallucinations
+      max_tokens: maxTokens,
     };
 
     const response = await axios.post(`${LM_STUDIO_URL}/chat/completions`, requestPayload, {
@@ -217,9 +253,8 @@ Output: The phrase translated to ${targetLanguage}, keeping <xx>MetaMask</xx> un
     const translatedLength = translated.length;
     const lengthRatio = translatedLength / originalLength;
 
-    // If translation is more than 3x the original length, it's likely hallucinated
-    const MAX_LENGTH_RATIO = 3.0;
-    if (lengthRatio > MAX_LENGTH_RATIO) {
+    // If translation exceeds the configured length ratio, it's likely hallucinated
+    if (lengthRatio > maxLengthRatio) {
       console.warn(
         `     WARNING: Translation is ${lengthRatio.toFixed(1)}x longer than original!`
       );
@@ -257,7 +292,7 @@ Output: The phrase translated to ${targetLanguage}, keeping <xx>MetaMask</xx> un
 }
 
 // Function to translate text while preserving placeholders inside {}
-async function translateWithPlaceholders(text, langCode, retryCount = 0) {
+async function translateWithPlaceholders(text, langCode, keyName = '', retryCount = 0) {
   const maxRetries = 5;
   const singleQuoteRegex = /{[^}]+}/g;
   const singleQuoteRegexPlaceholders = text.match(singleQuoteRegex) || [];
@@ -341,40 +376,49 @@ async function translateWithPlaceholders(text, langCode, retryCount = 0) {
       `  LM Studio failed, falling back to DeepL for: "${text.substring(0, 50)}..."`
     );
     // Fallback to DeepL if LM Studio fails
-    const hasPlaceholders = translatedText.includes('<xx>');
+    try {
+      const hasPlaceholders = translatedText.includes('<xx>');
 
-    if (hasPlaceholders) {
-      // Use DeepL with XML tag handling for strings with placeholders
-      const response = await axios.post(
-        'https://api-free.deepl.com/v2/translate',
-        new URLSearchParams({
-          auth_key: DEEPL_API_KEY,
-          text: translatedText,
-          source_lang: 'EN',
-          target_lang: langCode,
-          tag_handling: 'xml',
-          ignore_tags: 'xx',
-        }),
-        {
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        }
+      if (hasPlaceholders) {
+        // Use DeepL with XML tag handling for strings with placeholders
+        const response = await axios.post(
+          'https://api-free.deepl.com/v2/translate',
+          new URLSearchParams({
+            auth_key: DEEPL_API_KEY,
+            text: translatedText,
+            source_lang: 'EN',
+            target_lang: langCode,
+            tag_handling: 'xml',
+            ignore_tags: 'xx',
+          }),
+          {
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          }
+        );
+        translatedText = response.data.translations[0].text;
+      } else {
+        // Use DeepL without tag handling for simple strings
+        const response = await axios.post(
+          'https://api-free.deepl.com/v2/translate',
+          new URLSearchParams({
+            auth_key: DEEPL_API_KEY,
+            text: translatedText,
+            source_lang: 'EN',
+            target_lang: langCode,
+          }),
+          {
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          }
+        );
+        translatedText = response.data.translations[0].text;
+      }
+    } catch (deeplError) {
+      const langName = languageNames[langCode] || langCode;
+      console.warn(
+        `  [WARN] Both LM Studio and DeepL failed for key "${keyName}" (language: ${langName}). ` +
+        `Keeping original English text. LM Studio error: ${lmError.message}; DeepL error: ${deeplError.message}`
       );
-      translatedText = response.data.translations[0].text;
-    } else {
-      // Use DeepL without tag handling for simple strings
-      const response = await axios.post(
-        'https://api-free.deepl.com/v2/translate',
-        new URLSearchParams({
-          auth_key: DEEPL_API_KEY,
-          text: translatedText,
-          source_lang: 'EN',
-          target_lang: langCode,
-        }),
-        {
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        }
-      );
-      translatedText = response.data.translations[0].text;
+      // translatedText still contains the original (with <xx> markers), which will be cleaned below
     }
   }
 
@@ -452,7 +496,7 @@ async function translateObject(obj, langCode, existingTranslations = {}, path = 
         console.log(`  Skipped "${currentPath}" (already translated)`);
       } else {
         try {
-          translatedObj[key] = await translateWithPlaceholders(value, langCode);
+          translatedObj[key] = await translateWithPlaceholders(value, langCode, currentPath);
           translationCount++;
           console.log(`  Translated "${currentPath}"`);
           await delay(200); // Add a delay of 200ms between requests to avoid rate limiting
@@ -498,7 +542,7 @@ async function translateObject(obj, langCode, existingTranslations = {}, path = 
             const item = value[i];
             if (typeof item === 'string') {
               try {
-                translatedObj[key][i] = await translateWithPlaceholders(item, langCode);
+                translatedObj[key][i] = await translateWithPlaceholders(item, langCode, `${currentPath}[${i}]`);
                 translationCount++;
                 console.log(`  Translated array "${currentPath}[${i}]"`);
                 await delay(200);
@@ -528,7 +572,7 @@ async function translateObject(obj, langCode, existingTranslations = {}, path = 
           const item = value[i];
           if (typeof item === 'string') {
             try {
-              translatedObj[key][i] = await translateWithPlaceholders(item, langCode);
+              translatedObj[key][i] = await translateWithPlaceholders(item, langCode, `${currentPath}[${i}]`);
               translationCount++;
               console.log(`  Translated array "${currentPath}[${i}]"`);
               await delay(200); // Add a delay of 200ms between requests to avoid rate limiting
