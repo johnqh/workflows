@@ -1,5 +1,7 @@
 #!/bin/bash
 
+PUSH_PROJECTS_VERSION="1.1.0"
+
 # push_projects.sh - Reusable script to update, validate, version bump, and push projects
 #
 # This script is meant to be sourced by a project-specific script that defines:
