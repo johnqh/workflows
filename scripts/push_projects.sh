@@ -513,8 +513,8 @@ validate_project() {
     local pkg_json="$project_dir/package.json"
 
     if [ ! -f "$pkg_json" ]; then
-        log_error "No package.json found"
-        return 1
+        log_info "No package.json found, skipping validation"
+        return 0
     fi
 
     # Typecheck
@@ -711,8 +711,8 @@ bump_version() {
     local pkg_json="$project_dir/package.json"
 
     if [ ! -f "$pkg_json" ]; then
-        log_error "No package.json found"
-        return 1
+        log_info "No package.json found, skipping version bump"
+        return 0
     fi
 
     log_info "Bumping patch version..."
@@ -961,17 +961,19 @@ process_project() {
 
     log_success "All validation checks passed"
 
-    if ! bump_version "$project_path"; then
-        log_error "Failed to bump version for $project_name"
-        return 1
-    fi
+    if [ -f "$project_path/package.json" ]; then
+        if ! bump_version "$project_path"; then
+            log_error "Failed to bump version for $project_name"
+            return 1
+        fi
 
-    log_info "Updating $PKG_LOCKFILE..."
-    if ! pm_install >/dev/null 2>&1; then
-        log_error "Failed to update $PKG_LOCKFILE"
-        return 1
+        log_info "Updating $PKG_LOCKFILE..."
+        if ! pm_install >/dev/null 2>&1; then
+            log_error "Failed to update $PKG_LOCKFILE"
+            return 1
+        fi
+        log_success "$PKG_LOCKFILE updated"
     fi
-    log_success "$PKG_LOCKFILE updated"
 
     if ! commit_and_push "$project_path" "$project_name"; then
         log_error "Failed to commit and push for $project_name"
