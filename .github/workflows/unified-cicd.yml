@@ -28,6 +28,14 @@ on:
         description: "Docker image name (defaults to repo name, only used if Docker Hub secrets are set)"
         type: string
         default: ""
+      python-version:
+        description: "Python version to use (only for Python projects)"
+        type: string
+        default: "3.11"
+      python-package-manager:
+        description: "Python package manager: uv or pip (only for Python projects)"
+        type: string
+        default: "uv"
     secrets:
       NPM_TOKEN:
         description: "NPM authentication token for publishing and installing private packages"
@@ -68,10 +76,14 @@ jobs:
       - name: "Checkout"
         uses: actions/checkout@v4
 
-      - name: "Detect package manager"
+      - name: "Detect project type"
         id: detect-pm
         run: |
-          if [ -f "bun.lock" ] || [ -f "bun.lockb" ]; then
+          # Check for Python project first
+          if [ -f "pyproject.toml" ] || [ -f "requirements.txt" ] || [ -f "setup.py" ]; then
+            echo "manager=python" >> $GITHUB_OUTPUT
+            echo "🐍 Detected Python project"
+          elif [ -f "bun.lock" ] || [ -f "bun.lockb" ]; then
             echo "manager=bun" >> $GITHUB_OUTPUT
             echo "🥟 Detected Bun project (bun.lock found)"
           else
@@ -79,6 +91,64 @@ jobs:
             echo "📦 Detected npm project"
           fi
 
+      # ---- Python project steps ----
+      - name: "Setup Python"
+        if: steps.detect-pm.outputs.manager == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: "Install Python dependencies"
+        if: steps.detect-pm.outputs.manager == 'python'
+        run: |
+          PM="${{ inputs.python-package-manager }}"
+          if [ "$PM" == "uv" ]; then
+            echo "📦 Installing with uv"
+            pip install uv
+            uv sync
+          else
+            echo "📦 Installing with pip"
+            if [ -f "pyproject.toml" ]; then
+              pip install -e ".[dev]"
+            elif [ -f "requirements.txt" ]; then
+              pip install -r requirements.txt
+            fi
+          fi
+
+      - name: "Python lint"
+        if: steps.detect-pm.outputs.manager == 'python'
+        run: |
+          if command -v ruff &> /dev/null; then
+            echo "🔍 Running ruff"
+            ruff check .
+          elif [ -f "pyproject.toml" ] && grep -q "ruff" pyproject.toml 2>/dev/null; then
+            echo "🔍 Running ruff (from dev deps)"
+            ruff check .
+          else
+            echo "ℹ️  No Python linter configured, skipping"
+          fi
+
+      - name: "Python type check"
+        if: steps.detect-pm.outputs.manager == 'python'
+        run: |
+          if command -v mypy &> /dev/null; then
+            echo "📝 Running mypy"
+            mypy src/ --ignore-missing-imports || true
+          else
+            echo "ℹ️  mypy not installed, skipping type check"
+          fi
+
+      - name: "Python tests"
+        if: steps.detect-pm.outputs.manager == 'python'
+        run: |
+          if command -v pytest &> /dev/null; then
+            echo "🧪 Running pytest"
+            pytest tests/ -v
+          else
+            echo "ℹ️  pytest not installed, skipping tests"
+          fi
+
+      # ---- Node.js project steps ----
       - name: "Setup Bun"
         if: steps.detect-pm.outputs.manager == 'bun'
         uses: oven-sh/setup-bun@v2
@@ -122,6 +192,7 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: "Run type checking"
+        if: steps.detect-pm.outputs.manager != 'python'
         run: |
           if [ ! -f "tsconfig.json" ]; then
             echo "ℹ️  No tsconfig.json found, skipping type check"
@@ -155,6 +226,7 @@ jobs:
           fi
 
       - name: "Run linting"
+        if: steps.detect-pm.outputs.manager != 'python'
         run: |
           PM="${{ steps.detect-pm.outputs.manager }}"
 
@@ -171,6 +243,7 @@ jobs:
           fi
 
       - name: "Run tests"
+        if: steps.detect-pm.outputs.manager != 'python'
         run: |
           PM="${{ steps.detect-pm.outputs.manager }}"
 
@@ -194,6 +267,7 @@ jobs:
           fi
 
       - name: "Build project"
+        if: steps.detect-pm.outputs.manager != 'python'
         run: |
           PM="${{ steps.detect-pm.outputs.manager }}"
           # Pass VITE_* secrets as environment variables to the build
