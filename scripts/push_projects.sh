@@ -73,6 +73,19 @@ detect_package_manager() {
     log_info "Detected package manager: $PKG_MANAGER (lockfile: $PKG_LOCKFILE)"
 }
 
+# Run a command with a timeout (in seconds). Returns 143 on timeout.
+run_with_timeout() {
+    local seconds=$1; shift
+    "$@" &
+    local pid=$!
+    ( sleep "$seconds" && kill "$pid" 2>/dev/null ) &
+    local watchdog=$!
+    local exit_code=0
+    wait "$pid" || exit_code=$?
+    kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null || true
+    return $exit_code
+}
+
 # Run package manager install command
 pm_install() {
     local packages=("$@")
@@ -384,11 +397,16 @@ update_sudobility_deps() {
 
         if [ ${#packages_to_update[@]} -gt 0 ]; then
             log_info "Installing all updates together using $PKG_MANAGER..."
-            if pm_install "${packages_to_update[@]}" 2>&1 | grep -v "WARN" || true; then
-                log_success "Updated @sudobility dependencies"
-            else
-                log_error "Failed to update dependencies"
+            run_with_timeout 120 pm_install "${packages_to_update[@]}" 2>&1
+            local install_exit_code=$?
+            if [ $install_exit_code -eq 143 ]; then
+                log_error "Install timed out after 120 seconds"
+                return 1
+            elif [ $install_exit_code -ne 0 ]; then
+                log_error "Failed to update dependencies (exit code: $install_exit_code)"
+                return 1
             fi
+            log_success "Updated @sudobility dependencies"
         fi
     else
         log_info "No @sudobility dependencies found"
@@ -427,12 +445,10 @@ update_sudobility_deps() {
         done
     fi
 
-    if [ "$has_updates" = true ]; then
-        return 1
-    else
+    if [ "$has_updates" != true ]; then
         log_info "No updates needed"
-        return 0
     fi
+    return 0
 }
 
 # Check if project has build script
@@ -493,18 +509,18 @@ validate_project() {
     # Typecheck
     if [ "$(has_typecheck_script "$pkg_json")" = "yes" ]; then
         log_info "Running typecheck..."
-        if ! pm_run typecheck 2>&1 | tee /tmp/typecheck.log; then
+        pm_run typecheck 2>&1
+        if [ $? -ne 0 ]; then
             log_error "Typecheck failed"
-            cat /tmp/typecheck.log
             return 1
         fi
         log_success "Typecheck passed"
     else
         if [ -f "$project_dir/tsconfig.json" ]; then
             log_info "Running tsc --noEmit..."
-            if ! pm_exec tsc --noEmit 2>&1 | tee /tmp/tsc.log; then
+            pm_exec tsc --noEmit 2>&1
+            if [ $? -ne 0 ]; then
                 log_error "TypeScript compilation failed"
-                cat /tmp/tsc.log
                 return 1
             fi
             log_success "TypeScript check passed"
@@ -514,9 +530,9 @@ validate_project() {
     # Lint
     if [ "$(has_lint_script "$pkg_json")" = "yes" ]; then
         log_info "Running lint..."
-        if ! pm_run lint 2>&1 | tee /tmp/lint.log; then
+        pm_run lint 2>&1
+        if [ $? -ne 0 ]; then
             log_error "Lint failed"
-            cat /tmp/lint.log
             return 1
         fi
         log_success "Lint passed"
@@ -656,8 +672,12 @@ process_subpackages() {
         log_info "  Updating @sudobility dependencies..."
         local subpkg_update_result=0
         update_sudobility_deps "$subpackage_dir" || subpkg_update_result=$?
-        if [ "$subpkg_update_result" -eq 2 ]; then
-            log_error "Failed to fetch @sudobility package from npm for sub-package $subpackage_name, stopping"
+        if [ "$subpkg_update_result" -ne 0 ]; then
+            if [ "$subpkg_update_result" -eq 2 ]; then
+                log_error "Failed to fetch @sudobility package from npm for sub-package $subpackage_name, stopping"
+            else
+                log_error "Failed to update @sudobility dependencies for sub-package $subpackage_name, stopping"
+            fi
             return 1
         fi
 
@@ -884,8 +904,12 @@ process_project() {
     log_info "Updating @sudobility dependencies to latest..."
     local update_result=0
     update_sudobility_deps "$project_path" || update_result=$?
-    if [ "$update_result" -eq 2 ]; then
-        log_error "Failed to fetch @sudobility package from npm, stopping"
+    if [ "$update_result" -ne 0 ]; then
+        if [ "$update_result" -eq 2 ]; then
+            log_error "Failed to fetch @sudobility package from npm, stopping"
+        else
+            log_error "Failed to update @sudobility dependencies, stopping"
+        fi
         return 1
     fi
 
