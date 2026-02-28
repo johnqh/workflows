@@ -563,15 +563,13 @@ validate_project() {
             fi
         else
             log_info "Running tests..."
-            # Try various test runners:
-            # - test:run: explicit single-run script
-            # - test -- --run: vitest single-run flag
-            # - test -- --ci --forceExit: jest CI mode with force exit (for open handles)
+            # Try test:run first (explicit single-run script), then fall back to
+            # CI=true pm_run test.  CI=true disables vitest/jest watch mode.
+            # We avoid passing extra flags (--run, --ci) because bun can
+            # misinterpret "bun run test --run" as its native test runner.
             if pm_run test:run >/dev/null 2>&1; then
                 log_success "Tests passed"
-            elif pm_run test --run >/dev/null 2>&1; then
-                log_success "Tests passed"
-            elif pm_run test --ci --forceExit >/dev/null 2>&1; then
+            elif CI=true pm_run test >/dev/null 2>&1; then
                 log_success "Tests passed"
             else
                 log_error "Tests failed"
@@ -621,9 +619,7 @@ validate_subpackage() {
             log_info "    Running tests..."
             if pm_run test:run >/dev/null 2>&1; then
                 log_success "    Tests passed"
-            elif pm_run test --run >/dev/null 2>&1; then
-                log_success "    Tests passed"
-            elif pm_run test --ci --forceExit >/dev/null 2>&1; then
+            elif CI=true pm_run test >/dev/null 2>&1; then
                 log_success "    Tests passed"
             else
                 log_error "    Tests failed for $package_name"
