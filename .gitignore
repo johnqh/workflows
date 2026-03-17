@@ -26,3 +26,6 @@ temp/
 
 # Claude Code local settings
 .claude/settings.local.json
+.env
+.env.local
+.env.merged
