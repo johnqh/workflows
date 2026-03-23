@@ -16,7 +16,7 @@
  * Options:
  *   --api-key <key>    API key for Bearer token auth (or set WHISPERLY_API_KEY env var)
  *   --env <file>       Path to .env file
- *   --batch-limit <n>  Max total translations per API call (strings × languages, default: 400)
+ *   --batch-limit <n>  Max total translations per API call (strings × languages, default: 50)
  *
  * Example:
  *   node localize_batch.cjs ./public/locales https://api.whisperly.dev/api/v1/translate/xxx/yyy
@@ -41,14 +41,14 @@ function printUsage() {
   console.error('Options:');
   console.error('  --api-key <key>    API key for Bearer auth (or set WHISPERLY_API_KEY env var)');
   console.error('  --env <file>       Path to .env file');
-  console.error('  --batch-limit <n>  Max translations per API call (strings × languages, default: 100)');
+  console.error('  --batch-limit <n>  Max translations per API call (strings × languages, default: 50)');
 }
 
 let localesDir = null;
 let endpointUrl = null;
 let apiKey = null;
 let envFile = null;
-let batchLimit = 100;
+let batchLimit = 50;
 
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
