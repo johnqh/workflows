@@ -466,9 +466,10 @@ function sanitizeObjectForRTL(obj, langCode) {
   return sanitizeValue(obj);
 }
 
-// Recursive function to translate all string values in a JSON object
-async function translateObject(obj, langCode, existingTranslations = {}, path = '') {
-  const translatedObj = {};
+// Recursive function to translate all string values in a JSON object.
+// Mutates `accumulator` in-place and calls `saveFn()` after each successful translation
+// so that progress is persisted to disk incrementally.
+async function translateObject(obj, langCode, accumulator, saveFn, path = '') {
   let translationCount = 0;
   let skippedCount = 0;
 
@@ -478,7 +479,7 @@ async function translateObject(obj, langCode, existingTranslations = {}, path = 
     if (typeof value === 'string') {
       // Empty strings should stay empty - no translation needed
       if (value === '') {
-        translatedObj[key] = '';
+        accumulator[key] = '';
         skippedCount++;
         console.log(`  Skipped "${currentPath}" (empty string)`);
         continue;
@@ -486,19 +487,19 @@ async function translateObject(obj, langCode, existingTranslations = {}, path = 
 
       // Check if the key already has a valid translation (non-empty string)
       const hasValidTranslation =
-        existingTranslations[key] &&
-        typeof existingTranslations[key] === 'string' &&
-        existingTranslations[key].trim() !== '';
+        accumulator[key] &&
+        typeof accumulator[key] === 'string' &&
+        accumulator[key].trim() !== '';
 
       if (hasValidTranslation) {
-        translatedObj[key] = existingTranslations[key];
         skippedCount++;
         console.log(`  Skipped "${currentPath}" (already translated)`);
       } else {
         try {
-          translatedObj[key] = await translateWithPlaceholders(value, langCode, currentPath);
+          accumulator[key] = await translateWithPlaceholders(value, langCode, currentPath);
           translationCount++;
           console.log(`  Translated "${currentPath}"`);
+          saveFn();
           await delay(200); // Add a delay of 200ms between requests to avoid rate limiting
         } catch (error) {
           console.error(`    Error translating "${currentPath}":`, error.message);
@@ -506,20 +507,17 @@ async function translateObject(obj, langCode, existingTranslations = {}, path = 
           if (error.message.includes('Rate limit exceeded')) {
             throw error;
           }
-          translatedObj[key] = value; // Fallback to original for other errors
+          accumulator[key] = value; // Fallback to original for other errors
         }
       }
     } else if (Array.isArray(value)) {
       // Handle arrays - translate each string element
-      const hasValidArrayTranslation =
-        existingTranslations[key] &&
-        Array.isArray(existingTranslations[key]) &&
-        existingTranslations[key].length === value.length;
+      const existingArray = Array.isArray(accumulator[key]) ? accumulator[key] : [];
 
-      if (hasValidArrayTranslation) {
+      if (existingArray.length === value.length) {
         // Check if all string array elements are valid (non-empty)
         // For non-string elements (objects, etc.), we consider them valid if they exist
-        const allElementsValid = existingTranslations[key].every((item, idx) => {
+        const allElementsValid = existingArray.every((item, idx) => {
           if (typeof item === 'string') {
             return item.trim() !== '';
           } else if (typeof item === 'object' && item !== null) {
@@ -532,91 +530,64 @@ async function translateObject(obj, langCode, existingTranslations = {}, path = 
         });
 
         if (allElementsValid) {
-          translatedObj[key] = existingTranslations[key];
           skippedCount++;
           console.log(`  Skipped array "${currentPath}" (already translated)`);
-        } else {
-          // Re-translate if any element is invalid
-          translatedObj[key] = [];
-          for (let i = 0; i < value.length; i++) {
-            const item = value[i];
-            if (typeof item === 'string') {
-              try {
-                translatedObj[key][i] = await translateWithPlaceholders(item, langCode, `${currentPath}[${i}]`);
-                translationCount++;
-                console.log(`  Translated array "${currentPath}[${i}]"`);
-                await delay(200);
-              } catch (error) {
-                console.error(
-                  `    Error translating array "${currentPath}[${i}]":`,
-                  error.message
-                );
-                if (error.message.includes('Rate limit exceeded')) {
-                  throw error;
-                }
-                translatedObj[key][i] = item;
-              }
-            } else if (typeof item === 'object' && item !== null) {
-              const result = await translateObject(item, langCode, {}, `${currentPath}[${i}]`);
-              translatedObj[key][i] = result.obj;
-              translationCount += result.count;
-              skippedCount += result.skipped;
-            } else {
-              translatedObj[key][i] = item;
-            }
-          }
+          continue;
         }
-      } else {
-        translatedObj[key] = [];
-        for (let i = 0; i < value.length; i++) {
-          const item = value[i];
-          if (typeof item === 'string') {
-            try {
-              translatedObj[key][i] = await translateWithPlaceholders(item, langCode, `${currentPath}[${i}]`);
-              translationCount++;
-              console.log(`  Translated array "${currentPath}[${i}]"`);
-              await delay(200); // Add a delay of 200ms between requests to avoid rate limiting
-            } catch (error) {
-              console.error(
-                `    Error translating array "${currentPath}[${i}]":`,
-                error.message
-              );
-              // If it's a rate limit error after max retries, fail the entire process
-              if (error.message.includes('Rate limit exceeded')) {
-                throw error;
-              }
-              translatedObj[key][i] = item; // Fallback to original for other errors
+      }
+
+      // Translate array elements
+      if (!Array.isArray(accumulator[key])) {
+        accumulator[key] = [];
+      }
+      for (let i = 0; i < value.length; i++) {
+        const item = value[i];
+        if (typeof item === 'string') {
+          try {
+            accumulator[key][i] = await translateWithPlaceholders(item, langCode, `${currentPath}[${i}]`);
+            translationCount++;
+            console.log(`  Translated array "${currentPath}[${i}]"`);
+            saveFn();
+            await delay(200); // Add a delay of 200ms between requests to avoid rate limiting
+          } catch (error) {
+            console.error(
+              `    Error translating array "${currentPath}[${i}]":`,
+              error.message
+            );
+            // If it's a rate limit error after max retries, fail the entire process
+            if (error.message.includes('Rate limit exceeded')) {
+              throw error;
             }
-          } else if (typeof item === 'object' && item !== null) {
-            // Handle objects within arrays
-            const result = await translateObject(item, langCode, {}, `${currentPath}[${i}]`);
-            translatedObj[key][i] = result.obj;
-            translationCount += result.count;
-            skippedCount += result.skipped;
-          } else {
-            // Preserve non-string, non-object values as-is
-            translatedObj[key][i] = item;
+            accumulator[key][i] = item; // Fallback to original for other errors
           }
+        } else if (typeof item === 'object' && item !== null) {
+          // Handle objects within arrays
+          if (!accumulator[key][i] || typeof accumulator[key][i] !== 'object') {
+            accumulator[key][i] = {};
+          }
+          const result = await translateObject(item, langCode, accumulator[key][i], saveFn, `${currentPath}[${i}]`);
+          translationCount += result.count;
+          skippedCount += result.skipped;
+        } else {
+          // Preserve non-string, non-object values as-is
+          accumulator[key][i] = item;
         }
       }
     } else if (typeof value === 'object' && value !== null) {
       // Recursively translate nested objects
-      const result = await translateObject(
-        value,
-        langCode,
-        existingTranslations[key] || {},
-        currentPath
-      );
-      translatedObj[key] = result.obj;
+      if (!accumulator[key] || typeof accumulator[key] !== 'object' || Array.isArray(accumulator[key])) {
+        accumulator[key] = {};
+      }
+      const result = await translateObject(value, langCode, accumulator[key], saveFn, currentPath);
       translationCount += result.count;
       skippedCount += result.skipped;
     } else {
       // Preserve non-string values as-is
-      translatedObj[key] = value;
+      accumulator[key] = value;
     }
   }
 
-  return { obj: translatedObj, count: translationCount, skipped: skippedCount };
+  return { count: translationCount, skipped: skippedCount };
 }
 
 async function translateFiles() {
@@ -657,16 +628,23 @@ async function translateFiles() {
         }
 
         try {
-          // Translate the entire JSON object
-          const result = await translateObject(content, langCode, existingTranslations);
-          let translatedContent = result.obj;
+          // Create accumulator from existing translations (deep copy)
+          const accumulator = JSON.parse(JSON.stringify(existingTranslations));
+
+          // Save function that persists current state to disk after each translation
+          const saveFn = () => {
+            const contentToSave = sanitizeObjectForRTL(accumulator, langCode);
+            const json = JSON.stringify(contentToSave, null, 2);
+            fs.writeFileSync(targetFile, json, 'utf8');
+          };
+
+          // Translate the entire JSON object, saving after each API call
+          const result = await translateObject(content, langCode, accumulator, saveFn);
           const newTranslations = result.count;
           const skippedTranslations = result.skipped;
 
-          // Sanitize RTL languages to prevent JSON corruption
-          translatedContent = sanitizeObjectForRTL(translatedContent, langCode);
-
-          // Write the translated content to the target file
+          // Final save with RTL validation
+          const translatedContent = sanitizeObjectForRTL(accumulator, langCode);
           const jsonString = JSON.stringify(translatedContent, null, 2);
 
           // For RTL languages, validate JSON integrity before writing
