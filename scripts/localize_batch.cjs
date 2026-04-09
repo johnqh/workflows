@@ -42,6 +42,7 @@ function printUsage() {
   console.error('  --api-key <key>    API key for Bearer auth (or set WHISPERLY_API_KEY env var)');
   console.error('  --env <file>       Path to .env file');
   console.error('  --batch-limit <n>  Max translations per API call (strings × languages, default: 50)');
+  console.error('  --lang-batch <n>   Max languages per API call (default: all at once)');
 }
 
 let localesDir = null;
@@ -49,6 +50,7 @@ let endpointUrl = null;
 let apiKey = null;
 let envFile = null;
 let batchLimit = 50;
+let langBatch = 0; // 0 = all languages at once
 
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
@@ -58,6 +60,8 @@ for (let i = 0; i < args.length; i++) {
     envFile = path.resolve(process.cwd(), args[++i]);
   } else if (arg === '--batch-limit' && args[i + 1]) {
     batchLimit = parseInt(args[++i], 10);
+  } else if (arg === '--lang-batch' && args[i + 1]) {
+    langBatch = parseInt(args[++i], 10);
   } else if (arg === '--help' || arg === '-h') {
     printUsage();
     process.exit(0);
@@ -132,6 +136,7 @@ console.log('='.repeat(60));
 console.log(`Source: ${sourceDir}`);
 console.log(`Endpoint: ${endpointUrl}`);
 console.log(`Batch limit: ${batchLimit} (strings × languages)`);
+console.log(`Lang batch: ${langBatch || 'all'} languages per API call`);
 console.log(`Languages: ${targetLanguages.join(', ')}`);
 console.log('='.repeat(60));
 
@@ -388,36 +393,50 @@ async function main() {
       }
     }
 
+    // Split languages into chunks if --lang-batch is set
+    const langChunks = [];
+    if (langBatch > 0 && langBatch < langsWithMissing.length) {
+      for (let l = 0; l < langsWithMissing.length; l += langBatch) {
+        langChunks.push(langsWithMissing.slice(l, l + langBatch));
+      }
+    } else {
+      langChunks.push(langsWithMissing);
+    }
+
     for (let i = 0; i < missingEntries.length; i += batchSize) {
       const batch = missingEntries.slice(i, i + batchSize);
       const batchNum = Math.floor(i / batchSize) + 1;
-
       const stringsToSend = batch.map(e => e.value);
 
-      console.log(`  Batch ${batchNum}/${totalBatches}: translating ${batch.length} string(s)...`);
+      for (let lc = 0; lc < langChunks.length; lc++) {
+        const langChunk = langChunks[lc];
+        const langLabel = langChunks.length > 1 ? ` [langs ${lc + 1}/${langChunks.length}]` : '';
 
-      try {
-        const translations = await translateBatch(stringsToSend, langsWithMissing);
+        console.log(`  Batch ${batchNum}/${totalBatches}${langLabel}: translating ${batch.length} string(s) to ${langChunk.length} language(s)...`);
 
-        for (const lang of langsWithMissing) {
-          const translated = translations[lang];
-          if (!translated) {
-            console.warn(`  Warning: no translations returned for ${lang}`);
-            continue;
+        try {
+          const translations = await translateBatch(stringsToSend, langChunk);
+
+          for (const lang of langChunk) {
+            const translated = translations[lang];
+            if (!translated) {
+              console.warn(`  Warning: no translations returned for ${lang}`);
+              continue;
+            }
+            for (let j = 0; j < batch.length; j++) {
+              translationsByLang[lang][batch[j].path] = translated[j];
+            }
           }
-          for (let j = 0; j < batch.length; j++) {
-            translationsByLang[lang][batch[j].path] = translated[j];
-          }
+        } catch (error) {
+          console.error(`  FATAL: API failed after retries in batch ${batchNum}${langLabel}: ${error.message}`);
+          console.error('  Saving translations from completed batches before stopping...');
+          saveTranslatedFiles();
+          process.exit(1);
         }
-      } catch (error) {
-        console.error(`  FATAL: API failed after retries in batch ${batchNum}: ${error.message}`);
-        console.error('  Saving translations from completed batches before stopping...');
-        saveTranslatedFiles();
-        process.exit(1);
-      }
 
-      // Save after each batch so progress is preserved if interrupted
-      saveTranslatedFiles();
+        // Save after each batch so progress is preserved if interrupted
+        saveTranslatedFiles();
+      }
     }
 
     // Final stats
