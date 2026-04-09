@@ -196,8 +196,9 @@ function buildTargetObject(source, existing, newTranslations, lang, prefix = '')
       if (lang === 'ar') translated = cleanRTLText(translated);
       return translated;
     }
-    // Fallback to source
-    return source;
+    // No translation available — return undefined to omit from output
+    // (i18next will fall back to the source language at runtime)
+    return undefined;
   }
 
   if (Array.isArray(source)) {
@@ -217,9 +218,12 @@ function buildTargetObject(source, existing, newTranslations, lang, prefix = '')
     const result = {};
     for (const [key, value] of Object.entries(source)) {
       const p = prefix ? `${prefix}.${key}` : key;
-      result[key] = buildTargetObject(value, existing?.[key], newTranslations, lang, p);
+      const built = buildTargetObject(value, existing?.[key], newTranslations, lang, p);
+      if (built !== undefined) {
+        result[key] = built;
+      }
     }
-    return result;
+    return Object.keys(result).length > 0 ? result : undefined;
   }
 
   return source;
@@ -374,7 +378,9 @@ async function main() {
           }
         }
       } catch (error) {
-        console.error(`  Error in batch ${batchNum}: ${error.message}`);
+        console.error(`  FATAL: API failed after retries in batch ${batchNum}: ${error.message}`);
+        console.error('  Stopping to prevent writing source language as translations.');
+        process.exit(1);
       }
     }
 
