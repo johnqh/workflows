@@ -246,7 +246,7 @@ async function translateBatch(strings, targetLangs, retryCount = 0) {
 
     const startTime = Date.now();
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 120000);
+    const timeout = setTimeout(() => controller.abort(), 300000);
 
     const response = await fetch(endpointUrl, {
       method: 'POST',
