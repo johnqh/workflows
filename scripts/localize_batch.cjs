@@ -356,6 +356,38 @@ async function main() {
       translationsByLang[lang] = {};
     }
 
+    // Helper: save all translated files for this source file
+    function saveTranslatedFiles() {
+      for (const lang of targetLanguages) {
+        const targetDir = path.join(localesDir, lang);
+        fs.mkdirSync(targetDir, { recursive: true });
+
+        const targetObj = buildTargetObject(
+          sourceContent,
+          existingByLang[lang],
+          translationsByLang[lang] || {},
+          lang
+        );
+
+        if (targetObj === undefined) continue;
+
+        const targetFile = path.join(targetDir, file);
+        const jsonString = JSON.stringify(targetObj, null, 2);
+
+        // Validate JSON for Arabic (RTL)
+        if (lang === 'ar') {
+          try {
+            JSON.parse(jsonString);
+          } catch (jsonError) {
+            console.error(`  JSON validation failed for Arabic: ${jsonError.message}`);
+            continue;
+          }
+        }
+
+        fs.writeFileSync(targetFile, jsonString, 'utf8');
+      }
+    }
+
     for (let i = 0; i < missingEntries.length; i += batchSize) {
       const batch = missingEntries.slice(i, i + batchSize);
       const batchNum = Math.floor(i / batchSize) + 1;
@@ -379,38 +411,17 @@ async function main() {
         }
       } catch (error) {
         console.error(`  FATAL: API failed after retries in batch ${batchNum}: ${error.message}`);
-        console.error('  Stopping to prevent writing source language as translations.');
+        console.error('  Saving translations from completed batches before stopping...');
+        saveTranslatedFiles();
         process.exit(1);
       }
+
+      // Save after each batch so progress is preserved if interrupted
+      saveTranslatedFiles();
     }
 
-    // Write translated files
+    // Final stats
     for (const lang of targetLanguages) {
-      const targetDir = path.join(localesDir, lang);
-      fs.mkdirSync(targetDir, { recursive: true });
-
-      const targetObj = buildTargetObject(
-        sourceContent,
-        existingByLang[lang],
-        translationsByLang[lang] || {},
-        lang
-      );
-
-      const targetFile = path.join(targetDir, file);
-      const jsonString = JSON.stringify(targetObj, null, 2);
-
-      // Validate JSON for Arabic (RTL)
-      if (lang === 'ar') {
-        try {
-          JSON.parse(jsonString);
-        } catch (jsonError) {
-          console.error(`  JSON validation failed for Arabic: ${jsonError.message}`);
-          continue;
-        }
-      }
-
-      fs.writeFileSync(targetFile, jsonString, 'utf8');
-
       const newCount = missingPathsByLang[lang].size;
       const skippedCount = allStrings.filter(e => e.value !== '').length - newCount;
       totalNew += newCount;
