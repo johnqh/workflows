@@ -43,6 +43,7 @@ function printUsage() {
   console.error('  --env <file>       Path to .env file');
   console.error('  --batch-limit <n>  Max translations per API call (strings × languages, default: 50)');
   console.error('  --lang-batch <n>   Max languages per API call (default: all at once)');
+  console.error('  --word-limit <n>   Max words × languages per API call (default: 100)');
 }
 
 let localesDir = null;
@@ -51,6 +52,7 @@ let apiKey = null;
 let envFile = null;
 let batchLimit = 50;
 let langBatch = 0; // 0 = all languages at once
+let wordLimit = 100; // max words × languages per API call
 
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
@@ -62,6 +64,8 @@ for (let i = 0; i < args.length; i++) {
     batchLimit = parseInt(args[++i], 10);
   } else if (arg === '--lang-batch' && args[i + 1]) {
     langBatch = parseInt(args[++i], 10);
+  } else if (arg === '--word-limit' && args[i + 1]) {
+    wordLimit = parseInt(args[++i], 10);
   } else if (arg === '--help' || arg === '-h') {
     printUsage();
     process.exit(0);
@@ -137,6 +141,7 @@ console.log(`Source: ${sourceDir}`);
 console.log(`Endpoint: ${endpointUrl}`);
 console.log(`Batch limit: ${batchLimit} (strings × languages)`);
 console.log(`Lang batch: ${langBatch || 'all'} languages per API call`);
+console.log(`Word limit: ${wordLimit} (words × languages per API call)`);
 console.log(`Languages: ${targetLanguages.join(', ')}`);
 console.log('='.repeat(60));
 
@@ -350,10 +355,10 @@ async function main() {
       `  ${missingEntries.length} string(s) to translate across ${langsWithMissing.length} language(s)`
     );
 
-    // Calculate batch size: strings per API call = floor(limit / num_languages)
-    const batchSize = Math.max(1, Math.floor(batchLimit / langsWithMissing.length));
-    const totalBatches = Math.ceil(missingEntries.length / batchSize);
-    console.log(`  Batch size: ${batchSize} strings, ${totalBatches} batch(es)`);
+    // Word count helper
+    const countWords = (s) => s.split(/\s+/).filter(Boolean).length;
+
+    console.log(`  Will batch dynamically based on word limit (${wordLimit} words × languages)`);
 
     // Store translations: translationsByLang[lang][path] = translated string
     const translationsByLang = {};
@@ -403,16 +408,31 @@ async function main() {
       langChunks.push(langsWithMissing);
     }
 
-    for (let i = 0; i < missingEntries.length; i += batchSize) {
-      const batch = missingEntries.slice(i, i + batchSize);
-      const batchNum = Math.floor(i / batchSize) + 1;
+    // Build string batches dynamically based on word count × languages
+    let batchNum = 0;
+    let i = 0;
+    while (i < missingEntries.length) {
+      // Greedily add strings until word limit is reached
+      let batchWords = 0;
+      const batchStart = i;
+      while (i < missingEntries.length) {
+        const words = countWords(missingEntries[i].value);
+        // Always include at least one string per batch
+        if (batchStart < i && (batchWords + words) * langsWithMissing.length > wordLimit) {
+          break;
+        }
+        batchWords += words;
+        i++;
+      }
+      const batch = missingEntries.slice(batchStart, i);
+      batchNum++;
       const stringsToSend = batch.map(e => e.value);
 
       for (let lc = 0; lc < langChunks.length; lc++) {
         const langChunk = langChunks[lc];
         const langLabel = langChunks.length > 1 ? ` [langs ${lc + 1}/${langChunks.length}]` : '';
 
-        console.log(`  Batch ${batchNum}/${totalBatches}${langLabel}: translating ${batch.length} string(s) to ${langChunk.length} language(s)...`);
+        console.log(`  Batch ${batchNum}${langLabel}: ${batch.length} string(s), ~${batchWords} words × ${langChunk.length} lang(s)...`);
 
         try {
           const translations = await translateBatch(stringsToSend, langChunk);
