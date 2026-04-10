@@ -43,7 +43,7 @@ function printUsage() {
   console.error('  --env <file>       Path to .env file');
   console.error('  --batch-limit <n>  Max translations per API call (strings × languages, default: 50)');
   console.error('  --lang-batch <n>   Max languages per API call (default: all at once)');
-  console.error('  --word-limit <n>   Max words × languages per API call (default: 100)');
+  console.error('  --word-limit <n>   Max words × languages per API call (default: 40)');
 }
 
 let localesDir = null;
@@ -52,7 +52,7 @@ let apiKey = null;
 let envFile = null;
 let batchLimit = 50;
 let langBatch = 0; // 0 = all languages at once
-let wordLimit = 100; // max words × languages per API call
+let wordLimit = 40; // max words × languages per API call
 
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
