@@ -60,6 +60,13 @@ PKG_LOCKFILE=""
 detect_package_manager() {
     local project_dir="$1"
 
+    if [ -f "$project_dir/pyproject.toml" ] && [ ! -f "$project_dir/package.json" ]; then
+        PKG_MANAGER="python"
+        PKG_LOCKFILE=""
+        log_info "Detected package manager: python (pyproject.toml)"
+        return
+    fi
+
     if [ -f "$project_dir/bun.lock" ] || [ -f "$project_dir/bun.lockb" ]; then
         PKG_MANAGER="bun"
         PKG_LOCKFILE="bun.lock"
@@ -510,8 +517,61 @@ has_typecheck_script() {
 }
 
 # Run validation checks
+validate_python_project() {
+    local project_dir="$1"
+
+    # Lint
+    if [ -f "$project_dir/pyproject.toml" ] && grep -q "ruff" "$project_dir/pyproject.toml" 2>/dev/null; then
+        log_info "Running ruff check..."
+        if (cd "$project_dir" && ruff check src tests 2>/dev/null); then
+            log_success "Ruff lint passed"
+        else
+            log_error "Ruff lint failed"
+            return 1
+        fi
+        log_info "Running ruff format check..."
+        if (cd "$project_dir" && ruff format --check src tests 2>/dev/null); then
+            log_success "Ruff format passed"
+        else
+            log_error "Ruff format failed"
+            return 1
+        fi
+    fi
+
+    # Typecheck
+    if command -v mypy &> /dev/null; then
+        log_info "Running mypy..."
+        if (cd "$project_dir" && mypy src 2>&1); then
+            log_success "Mypy passed"
+        else
+            log_error "Mypy failed"
+            return 1
+        fi
+    fi
+
+    # Tests
+    if command -v pytest &> /dev/null; then
+        log_info "Running pytest..."
+        if (cd "$project_dir" && pytest -m "not integration" -q 2>&1); then
+            log_success "Tests passed"
+        else
+            log_error "Tests failed"
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
 validate_project() {
     local project_dir="$1"
+
+    # Handle Python projects
+    if [ "$PKG_MANAGER" = "python" ]; then
+        validate_python_project "$project_dir"
+        return $?
+    fi
+
     local pkg_json="$project_dir/package.json"
 
     if [ ! -f "$pkg_json" ]; then
@@ -706,6 +766,27 @@ process_subpackages() {
 # Bump version in package.json
 bump_version() {
     local project_dir="$1"
+
+    # Handle Python projects
+    if [ "$PKG_MANAGER" = "python" ]; then
+        local pyproject="$project_dir/pyproject.toml"
+        if [ ! -f "$pyproject" ]; then
+            log_info "No pyproject.toml found, skipping version bump"
+            return 0
+        fi
+
+        log_info "Bumping patch version (Python)..."
+        local current_version=$(python3 -c "import tomllib; print(tomllib.load(open('$pyproject','rb'))['project']['version'])")
+        local major minor patch
+        IFS='.' read -r major minor patch <<< "$current_version"
+        patch=$((patch + 1))
+        local new_version="$major.$minor.$patch"
+        # Update version in pyproject.toml
+        sed -i.bak "s/^version = \"$current_version\"/version = \"$new_version\"/" "$pyproject" && rm -f "$pyproject.bak"
+        log_success "Version bumped to $new_version"
+        return 0
+    fi
+
     local pkg_json="$project_dir/package.json"
 
     if [ ! -f "$pkg_json" ]; then
@@ -735,7 +816,7 @@ analyze_changes() {
     all_changes=$(echo "$all_changes" | sort -u)
 
     # Filter out package.json and lock files to find "real" changes
-    local code_changes=$(echo "$all_changes" | grep -v -E '^(package\.json|package-lock\.json|bun\.lock|bun\.lockb|yarn\.lock|pnpm-lock\.yaml)$' || true)
+    local code_changes=$(echo "$all_changes" | grep -v -E '^(package\.json|package-lock\.json|bun\.lock|bun\.lockb|yarn\.lock|pnpm-lock\.yaml|pyproject\.toml|uv\.lock)$' || true)
 
     # Categorize changes
     local src_changes=$(echo "$code_changes" | grep -E '^src/' || true)

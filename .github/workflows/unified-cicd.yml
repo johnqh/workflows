@@ -67,6 +67,9 @@ on:
       VERCEL_PROJECT_ID:
         description: "Vercel project ID"
         required: false
+      PYPI_TOKEN:
+        description: "PyPI API token for publishing Python packages"
+        required: false
 
 jobs:
   test:
@@ -143,7 +146,7 @@ jobs:
         run: |
           if command -v pytest &> /dev/null; then
             echo "🧪 Running pytest"
-            pytest tests/ -v
+            pytest -m "not integration" -v
           else
             echo "ℹ️  pytest not installed, skipping tests"
           fi
@@ -299,6 +302,7 @@ jobs:
       version: ${{ steps.check.outputs.version }}
       version_tag: ${{ steps.check.outputs.version_tag }}
       has_package_json: ${{ steps.check.outputs.has_package_json }}
+      has_pyproject_toml: ${{ steps.check.outputs.has_pyproject_toml }}
       package_name: ${{ steps.check.outputs.package_name }}
       is_develop_branch: ${{ steps.check.outputs.is_develop_branch }}
     steps:
@@ -328,13 +332,18 @@ jobs:
             echo "is_develop_branch=false" >> $GITHUB_OUTPUT
           fi
 
-          # Check if package.json exists (library project)
+          # Check if package.json or pyproject.toml exists (library project)
           if [ -f "package.json" ]; then
             echo "has_package_json=true" >> $GITHUB_OUTPUT
+            echo "has_pyproject_toml=false" >> $GITHUB_OUTPUT
+          elif [ -f "pyproject.toml" ]; then
+            echo "has_package_json=false" >> $GITHUB_OUTPUT
+            echo "has_pyproject_toml=true" >> $GITHUB_OUTPUT
           else
             echo "has_package_json=false" >> $GITHUB_OUTPUT
+            echo "has_pyproject_toml=false" >> $GITHUB_OUTPUT
             echo "should_release=false" >> $GITHUB_OUTPUT
-            echo "ℹ️  No package.json found, skipping release"
+            echo "ℹ️  No package.json or pyproject.toml found, skipping release"
             exit 0
           fi
 
@@ -356,9 +365,14 @@ jobs:
             exit 0
           fi
 
-          # Get current version from package.json
-          CURRENT_VERSION=$(node -p "require('./package.json').version")
-          PACKAGE_NAME=$(node -p "require('./package.json').name")
+          # Get current version and package name
+          if [ -f "package.json" ]; then
+            CURRENT_VERSION=$(node -p "require('./package.json').version")
+            PACKAGE_NAME=$(node -p "require('./package.json').name")
+          elif [ -f "pyproject.toml" ]; then
+            CURRENT_VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+            PACKAGE_NAME=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['name'])")
+          fi
 
           echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
           echo "version_tag=v$CURRENT_VERSION" >> $GITHUB_OUTPUT
@@ -525,6 +539,107 @@ jobs:
         if: failure() && steps.check-secrets.outputs.configured == 'true'
         run: |
           echo "❌ Release deployment FAILED for commit ${{ github.sha }}"
+          echo "Check: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+  release_pypi:
+    name: "Release to PyPI"
+    needs:
+      - test
+      - check_for_release
+    if: |
+      needs.check_for_release.outputs.should_release == 'true' &&
+      needs.check_for_release.outputs.has_pyproject_toml == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: "Check if PyPI secrets are configured"
+        id: check-secrets
+        run: |
+          if [ -n "${{ secrets.PYPI_TOKEN }}" ]; then
+            echo "configured=true" >> $GITHUB_OUTPUT
+            echo "✅ PYPI_TOKEN is configured"
+          else
+            echo "configured=false" >> $GITHUB_OUTPUT
+            echo "ℹ️  PYPI_TOKEN not configured, skipping PyPI publishing"
+          fi
+
+      - name: "Checkout"
+        if: steps.check-secrets.outputs.configured == 'true'
+        uses: actions/checkout@v6
+
+      - name: "Setup Python"
+        if: steps.check-secrets.outputs.configured == 'true'
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: "Check if version already published to PyPI"
+        if: steps.check-secrets.outputs.configured == 'true'
+        id: check-pypi-version
+        run: |
+          CURRENT_VERSION="${{ needs.check_for_release.outputs.version }}"
+          PACKAGE_NAME="${{ needs.check_for_release.outputs.package_name }}"
+
+          echo "Package: $PACKAGE_NAME"
+          echo "Current version: $CURRENT_VERSION"
+
+          pip install httpx 2>/dev/null
+          PUBLISHED_VERSION=$(python3 -c "
+          import urllib.request, json
+          try:
+              resp = urllib.request.urlopen(f'https://pypi.org/pypi/${PACKAGE_NAME}/json')
+              data = json.loads(resp.read())
+              print(data['info']['version'])
+          except Exception:
+              print('0.0.0')
+          " 2>/dev/null || echo "0.0.0")
+          echo "Published version on PyPI: $PUBLISHED_VERSION"
+
+          if [ "$CURRENT_VERSION" == "$PUBLISHED_VERSION" ]; then
+            echo "version_exists=true" >> $GITHUB_OUTPUT
+            echo "ℹ️  Version $CURRENT_VERSION already exists on PyPI, skipping publish"
+          else
+            echo "version_exists=false" >> $GITHUB_OUTPUT
+            echo "✅ Version $CURRENT_VERSION not on PyPI, will publish"
+          fi
+
+      - name: "Install build tools"
+        if: steps.check-secrets.outputs.configured == 'true' && steps.check-pypi-version.outputs.version_exists != 'true'
+        run: pip install build twine
+
+      - name: "Build package"
+        if: steps.check-secrets.outputs.configured == 'true' && steps.check-pypi-version.outputs.version_exists != 'true'
+        run: python -m build
+
+      - name: "Create GitHub Release"
+        if: steps.check-secrets.outputs.configured == 'true' && steps.check-pypi-version.outputs.version_exists != 'true'
+        uses: softprops/action-gh-release@v2.2.1
+        with:
+          tag_name: ${{ needs.check_for_release.outputs.version_tag }}
+          name: "Release ${{ needs.check_for_release.outputs.version }}"
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Publish to PyPI"
+        if: steps.check-secrets.outputs.configured == 'true' && steps.check-pypi-version.outputs.version_exists != 'true'
+        run: twine upload dist/*
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+
+      - name: "Notify deployment success"
+        if: success() && steps.check-secrets.outputs.configured == 'true' && steps.check-pypi-version.outputs.version_exists != 'true'
+        run: |
+          echo "🐍 Release ${{ needs.check_for_release.outputs.version }} deployed successfully!"
+          echo "• PyPI: https://pypi.org/project/${{ needs.check_for_release.outputs.package_name }}/${{ needs.check_for_release.outputs.version }}/"
+          echo "• GitHub: https://github.com/${{ github.repository }}/releases/tag/${{ needs.check_for_release.outputs.version_tag }}"
+
+      - name: "Notify deployment failure"
+        if: failure() && steps.check-secrets.outputs.configured == 'true'
+        run: |
+          echo "❌ PyPI release deployment FAILED for commit ${{ github.sha }}"
           echo "Check: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
   deploy_docker:
