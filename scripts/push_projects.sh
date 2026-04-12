@@ -370,6 +370,33 @@ get_latest_version() {
     npm view "${package_name}@latest" version --prefer-online 2>/dev/null || echo ""
 }
 
+# Fetch latest npm versions for multiple packages in parallel
+fetch_latest_versions_parallel() {
+    local packages=("$@")
+    local pids=()
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    for package in "${packages[@]}"; do
+        local safe_name="${package//\//_}"
+        ( npm view "${package}@latest" version --prefer-online 2>/dev/null > "$tmpdir/$safe_name" ) &
+        pids+=($!)
+    done
+
+    for pid in "${pids[@]}"; do
+        wait "$pid" 2>/dev/null
+    done
+
+    for package in "${packages[@]}"; do
+        local safe_name="${package//\//_}"
+        local version
+        version=$(cat "$tmpdir/$safe_name" 2>/dev/null)
+        echo "$package=$version"
+    done
+
+    rm -rf "$tmpdir"
+}
+
 # Update @sudobility dependencies to latest versions
 update_sudobility_deps() {
     local project_dir="$1"
@@ -382,38 +409,90 @@ update_sudobility_deps() {
 
     local has_updates=false
 
-    # === Update dependencies and devDependencies ===
-    local packages=$(get_sudobility_packages "$pkg_json")
+    # Read all @sudobility package names and current versions in one node call
+    local deps_info
+    deps_info=$(node -e "
+        const pkg = require('$pkg_json');
+        const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+        const peers = pkg.peerDependencies || {};
+        const lines = [];
+        for (const [k, v] of Object.entries(deps)) {
+            if (k.startsWith('@sudobility/')) lines.push('dep ' + k + ' ' + v);
+        }
+        for (const [k, v] of Object.entries(peers)) {
+            if (k.startsWith('@sudobility/')) lines.push('peer ' + k + ' ' + v);
+        }
+        console.log(lines.join('\n'));
+    " 2>/dev/null)
 
-    if [ -n "$packages" ]; then
-        log_info "Found @sudobility packages in deps: $packages"
+    if [ -z "$deps_info" ]; then
+        log_info "No @sudobility dependencies found"
+        return 0
+    fi
+
+    # Collect all unique package names for parallel version fetch
+    local all_package_names=()
+    while IFS=' ' read -r _type pkg_name _ver; do
+        [ -z "$pkg_name" ] && continue
+        all_package_names+=("$pkg_name")
+    done <<< "$deps_info"
+
+    if [ ${#all_package_names[@]} -eq 0 ]; then
+        log_info "No @sudobility dependencies found"
+        return 0
+    fi
+
+    # Deduplicate (deps and peers may overlap)
+    local unique_packages
+    unique_packages=($(printf '%s\n' "${all_package_names[@]}" | sort -u))
+
+    log_info "Fetching latest versions for ${#unique_packages[@]} @sudobility packages in parallel..."
+
+    # Fetch all latest versions in parallel (stored as "pkg=ver" lines, no associative array)
+    local latest_versions_data
+    latest_versions_data=$(fetch_latest_versions_parallel "${unique_packages[@]}")
+
+    # Helper: look up a version from the parallel-fetch results
+    _lookup_latest() {
+        local pkg="$1"
+        echo "$latest_versions_data" | grep "^${pkg}=" | head -1 | cut -d'=' -f2-
+    }
+
+    # === Update dependencies and devDependencies ===
+    local dep_packages=()
+    while IFS=' ' read -r type pkg_name current_version; do
+        [ "$type" = "dep" ] || continue
+        [ -z "$pkg_name" ] && continue
+        dep_packages+=("$pkg_name")
+    done <<< "$deps_info"
+
+    if [ ${#dep_packages[@]} -gt 0 ]; then
+        log_info "Found @sudobility packages in deps: ${dep_packages[*]}"
 
         local packages_to_update=()
 
-        for package in $packages; do
-            local current_version=$(node -e "
-                const pkg = require('$pkg_json');
-                const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-                console.log(deps['$package'] || '');
-            " 2>/dev/null)
+        while IFS=' ' read -r type pkg_name current_version; do
+            [ "$type" = "dep" ] || continue
+            [ -z "$pkg_name" ] && continue
 
-            local latest_version=$(get_latest_version "$package")
+            local latest_version
+            latest_version=$(_lookup_latest "$pkg_name")
 
             if [ -z "$latest_version" ]; then
-                log_error "Failed to fetch latest version for $package from npm"
+                log_error "Failed to fetch latest version for $pkg_name from npm"
                 return 2
             fi
 
-            local current_clean=$(echo "$current_version" | sed 's/^[\^~]//')
+            local current_clean="${current_version#[\^~]}"
 
             if [ "$current_clean" != "$latest_version" ]; then
-                log_info "Will update $package: $current_version -> ^$latest_version"
-                packages_to_update+=("$package@^$latest_version")
+                log_info "Will update $pkg_name: $current_version -> ^$latest_version"
+                packages_to_update+=("$pkg_name@^$latest_version")
                 has_updates=true
             else
-                log_info "$package is already at latest version ($latest_version)"
+                log_info "$pkg_name is already at latest version ($latest_version)"
             fi
-        done
+        done <<< "$deps_info"
 
         if [ ${#packages_to_update[@]} -gt 0 ]; then
             log_info "Installing all updates together using $PKG_MANAGER..."
@@ -433,36 +512,35 @@ update_sudobility_deps() {
     fi
 
     # === Update peerDependencies (directly in package.json) ===
-    local peer_packages=$(get_sudobility_peer_packages "$pkg_json")
+    local peer_list
+    peer_list=$(echo "$deps_info" | grep '^peer ' | awk '{print $2}' | tr '\n' ' ')
 
-    if [ -n "$peer_packages" ]; then
-        log_info "Found @sudobility packages in peerDeps: $peer_packages"
+    if [ -n "$peer_list" ]; then
+        log_info "Found @sudobility packages in peerDeps: $peer_list"
 
-        for package in $peer_packages; do
-            local current_version=$(node -e "
-                const pkg = require('$pkg_json');
-                const peers = pkg.peerDependencies || {};
-                console.log(peers['$package'] || '');
-            " 2>/dev/null)
+        while IFS=' ' read -r type pkg_name current_version; do
+            [ "$type" = "peer" ] || continue
+            [ -z "$pkg_name" ] && continue
 
-            local latest_version=$(get_latest_version "$package")
+            local latest_version
+            latest_version=$(_lookup_latest "$pkg_name")
 
             if [ -z "$latest_version" ]; then
-                log_error "Failed to fetch latest version for $package (peer) from npm"
+                log_error "Failed to fetch latest version for $pkg_name (peer) from npm"
                 return 2
             fi
 
-            local current_clean=$(echo "$current_version" | sed 's/^[\^~]//')
+            local current_clean="${current_version#[\^~]}"
 
             if [ "$current_clean" != "$latest_version" ]; then
-                log_info "Will update peerDep $package: $current_version -> ^$latest_version"
-                update_peer_dependency "$pkg_json" "$package" "^$latest_version"
+                log_info "Will update peerDep $pkg_name: $current_version -> ^$latest_version"
+                update_peer_dependency "$pkg_json" "$pkg_name" "^$latest_version"
                 has_updates=true
-                log_success "Updated peerDep $package to ^$latest_version"
+                log_success "Updated peerDep $pkg_name to ^$latest_version"
             else
-                log_info "peerDep $package is already at latest version ($latest_version)"
+                log_info "peerDep $pkg_name is already at latest version ($latest_version)"
             fi
-        done
+        done <<< "$deps_info"
     fi
 
     if [ "$has_updates" != true ]; then
@@ -471,49 +549,34 @@ update_sudobility_deps() {
     return 0
 }
 
-# Check if project has build script
-has_build_script() {
-    local pkg_json="$1"
-    node -e "
-        const pkg = require('$pkg_json');
-        console.log(pkg.scripts && pkg.scripts.build ? 'yes' : 'no');
-    " 2>/dev/null
-}
+# Cached package.json script flags (set by read_package_scripts)
+_PKG_HAS_BUILD="no"
+_PKG_HAS_TEST="no"
+_PKG_HAS_UNIT_TEST="no"
+_PKG_HAS_LINT="no"
+_PKG_HAS_TYPECHECK="no"
 
-# Check if project has test script
-has_test_script() {
+# Read all script flags from package.json in a single node call (replaces 5 separate invocations)
+read_package_scripts() {
     local pkg_json="$1"
-    node -e "
-        const pkg = require('$pkg_json');
-        console.log(pkg.scripts && (pkg.scripts['test:unit'] || pkg.scripts.test || pkg.scripts['test:run']) ? 'yes' : 'no');
-    " 2>/dev/null
-}
-
-# Check if project has unit test script
-has_unit_test_script() {
-    local pkg_json="$1"
-    node -e "
-        const pkg = require('$pkg_json');
-        console.log(pkg.scripts && pkg.scripts['test:unit'] ? 'yes' : 'no');
-    " 2>/dev/null
-}
-
-# Check if project has lint script
-has_lint_script() {
-    local pkg_json="$1"
-    node -e "
-        const pkg = require('$pkg_json');
-        console.log(pkg.scripts && pkg.scripts.lint ? 'yes' : 'no');
-    " 2>/dev/null
-}
-
-# Check if project has typecheck script
-has_typecheck_script() {
-    local pkg_json="$1"
-    node -e "
-        const pkg = require('$pkg_json');
-        console.log(pkg.scripts && pkg.scripts.typecheck ? 'yes' : 'no');
-    " 2>/dev/null
+    if [ ! -f "$pkg_json" ]; then
+        _PKG_HAS_BUILD="no"; _PKG_HAS_TEST="no"; _PKG_HAS_UNIT_TEST="no"
+        _PKG_HAS_LINT="no"; _PKG_HAS_TYPECHECK="no"
+        return
+    fi
+    local result
+    result=$(node -e "
+        const s = require('$pkg_json').scripts || {};
+        const f = [
+            s.build ? 'yes' : 'no',
+            (s['test:unit'] || s.test || s['test:run']) ? 'yes' : 'no',
+            s['test:unit'] ? 'yes' : 'no',
+            s.lint ? 'yes' : 'no',
+            s.typecheck ? 'yes' : 'no'
+        ];
+        console.log(f.join(' '));
+    " 2>/dev/null) || result="no no no no no"
+    read -r _PKG_HAS_BUILD _PKG_HAS_TEST _PKG_HAS_UNIT_TEST _PKG_HAS_LINT _PKG_HAS_TYPECHECK <<< "$result"
 }
 
 # Run validation checks
@@ -579,8 +642,11 @@ validate_project() {
         return 0
     fi
 
+    # Read all script flags in one node call
+    read_package_scripts "$pkg_json"
+
     # Typecheck
-    if [ "$(has_typecheck_script "$pkg_json")" = "yes" ]; then
+    if [ "$_PKG_HAS_TYPECHECK" = "yes" ]; then
         log_info "Running typecheck..."
         pm_run typecheck 2>&1
         if [ $? -ne 0 ]; then
@@ -601,7 +667,7 @@ validate_project() {
     fi
 
     # Lint
-    if [ "$(has_lint_script "$pkg_json")" = "yes" ]; then
+    if [ "$_PKG_HAS_LINT" = "yes" ]; then
         log_info "Running lint..."
         pm_run lint 2>&1
         if [ $? -ne 0 ]; then
@@ -612,8 +678,8 @@ validate_project() {
     fi
 
     # Tests
-    if [ "$(has_test_script "$pkg_json")" = "yes" ]; then
-        if [ "$(has_unit_test_script "$pkg_json")" = "yes" ]; then
+    if [ "$_PKG_HAS_TEST" = "yes" ]; then
+        if [ "$_PKG_HAS_UNIT_TEST" = "yes" ]; then
             log_info "Running unit tests (test:unit)..."
             if pm_run test:unit >/dev/null 2>&1; then
                 log_success "Unit tests passed"
@@ -639,7 +705,7 @@ validate_project() {
     fi
 
     # Build
-    if [ "$(has_build_script "$pkg_json")" = "yes" ]; then
+    if [ "$_PKG_HAS_BUILD" = "yes" ]; then
         log_info "Running build..."
         if pm_run build >/dev/null 2>&1; then
             log_success "Build passed"
@@ -666,8 +732,10 @@ validate_subpackage() {
 
     log_info "  Validating sub-package: $package_name"
 
-    if [ "$(has_test_script "$pkg_json")" = "yes" ]; then
-        if [ "$(has_unit_test_script "$pkg_json")" = "yes" ]; then
+    read_package_scripts "$pkg_json"
+
+    if [ "$_PKG_HAS_TEST" = "yes" ]; then
+        if [ "$_PKG_HAS_UNIT_TEST" = "yes" ]; then
             log_info "    Running unit tests (test:unit)..."
             if pm_run test:unit >/dev/null 2>&1; then
                 log_success "    Unit tests passed"
@@ -690,7 +758,7 @@ validate_subpackage() {
         log_info "    No test script found, skipping tests"
     fi
 
-    if [ "$(has_build_script "$pkg_json")" = "yes" ]; then
+    if [ "$_PKG_HAS_BUILD" = "yes" ]; then
         log_info "    Running build..."
         if pm_run build >/dev/null 2>&1; then
             log_success "    Build passed"
