@@ -1078,6 +1078,16 @@ process_project() {
         fi
     fi
 
+    # Auto-format TypeScript projects after dependency updates to fix prettier drift
+    if [ "$PKG_MANAGER" != "python" ] && [ -f "$project_path/package.json" ]; then
+        local has_format_script
+        has_format_script=$(node -e "const s=require('$project_path/package.json').scripts||{};console.log(s.format?'yes':'no')" 2>/dev/null) || has_format_script="no"
+        if [ "$has_format_script" = "yes" ]; then
+            log_info "Running format..."
+            (cd "$project_path" && pm_run format) 2>&1 || true
+        fi
+    fi
+
     local has_changes=false
     if ! git diff --quiet || ! git diff --cached --quiet; then
         has_changes=true
