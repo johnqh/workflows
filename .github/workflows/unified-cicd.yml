@@ -336,18 +336,22 @@ jobs:
             echo "is_develop_branch=false" >> $GITHUB_OUTPUT
           fi
 
-          # Check if package.json or pyproject.toml exists (library project)
+          # Check project type for version detection
           if [ -f "package.json" ]; then
             echo "has_package_json=true" >> $GITHUB_OUTPUT
             echo "has_pyproject_toml=false" >> $GITHUB_OUTPUT
           elif [ -f "pyproject.toml" ]; then
             echo "has_package_json=false" >> $GITHUB_OUTPUT
             echo "has_pyproject_toml=true" >> $GITHUB_OUTPUT
+          elif [ -f "Dockerfile" ]; then
+            echo "has_package_json=false" >> $GITHUB_OUTPUT
+            echo "has_pyproject_toml=false" >> $GITHUB_OUTPUT
+            echo "🐳 Docker-only project detected"
           else
             echo "has_package_json=false" >> $GITHUB_OUTPUT
             echo "has_pyproject_toml=false" >> $GITHUB_OUTPUT
             echo "should_release=false" >> $GITHUB_OUTPUT
-            echo "ℹ️  No package.json or pyproject.toml found, skipping release"
+            echo "ℹ️  No package.json, pyproject.toml, or Dockerfile found, skipping release"
             exit 0
           fi
 
