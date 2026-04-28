@@ -8,6 +8,7 @@ if [ -z "$APP_STORE_DIR" ]; then
 fi
 
 WORKFLOWS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$WORKFLOWS_DIR"
 PROJECT_DIR="$(cd "$APP_STORE_DIR/.." && pwd)"
 
 SCREENS_JSON="$APP_STORE_DIR/screens.json"

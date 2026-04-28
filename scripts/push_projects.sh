@@ -1089,7 +1089,7 @@ process_project() {
     fi
 
     local has_changes=false
-    if ! git diff --quiet || ! git diff --cached --quiet; then
+    if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
         has_changes=true
     fi
 

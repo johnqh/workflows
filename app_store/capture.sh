@@ -3,7 +3,7 @@
 #
 # The device must already be running and the app installed (via prepare.sh).
 # Iterates: languages × paths, saving screenshots to
-#   app_store/<lang>/screenshots/raw/<device_key>/<seq>.png
+#   app_store/screenshots/raw/<device_key>/<lang>/<seq>.png
 #
 # Usage:
 #   capture.sh --device <key> [options]
@@ -119,20 +119,26 @@ count=0
 
 echo "━━━ Capturing $total screenshots for $DEVICE_KEY ━━━"
 
+# Language switching is handled entirely via deep links — no device locale change
+# needed. This avoids restarting the app (which would lose iPad landscape orientation).
+
 for lang in "${LANGUAGES[@]}"; do
-  out_dir="$APP_STORE_DIR/$lang/screenshots/raw/$DEVICE_KEY"
+  out_dir="$APP_STORE_DIR/screenshots/raw/$DEVICE_KEY/$lang"
   mkdir -p "$out_dir"
   seq=0
 
-  # Change device locale so the app renders in this language
+  # Switch app language via deep link before capturing screenshots
+  lang_url="${SCHEME}:///${lang}/"
   if [ "$DRY_RUN" = true ]; then
-    echo "  [dry-run] Would set device locale to $lang"
+    echo "  [dry-run] Would switch language to $lang"
   else
+    echo "  Switching to $lang..."
     if [ "$DEVICE_TYPE" = "simulator" ]; then
-      set_simulator_locale "$UDID" "$lang"
+      xcrun simctl openurl "$UDID" "$lang_url"
     else
-      set_emulator_locale "$SERIAL" "$lang"
+      "$ADB" -s "$SERIAL" shell am start -a android.intent.action.VIEW -d "'$lang_url'" &>/dev/null
     fi
+    sleep "$DELAY"
   fi
 
   for path in "${PATHS[@]}"; do
