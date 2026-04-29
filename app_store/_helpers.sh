@@ -25,6 +25,9 @@ IOS_APP_NAME=$(jq -r '.build.ios.appName // .app.name' "$INFO_JSON")
 IOS_WORKSPACE=$(jq -r '.build.ios.workspace // (.build.ios.appName // .app.name) + ".xcworkspace"' "$INFO_JSON")
 IOS_SCHEME=$(jq -r '.build.ios.scheme // .build.ios.appName // .app.name' "$INFO_JSON")
 
+MACOS_WORKSPACE=$(jq -r '.build.macos.workspace // .build.ios.workspace // (.build.ios.appName // .app.name) + ".xcworkspace"' "$INFO_JSON")
+MACOS_SCHEME=$(jq -r '.build.macos.scheme // empty' "$INFO_JSON")
+
 ANDROID_EMULATOR="${ANDROID_HOME:-$HOME/Library/Android/sdk}/emulator/emulator"
 ADB="${ANDROID_HOME:-$HOME/Library/Android/sdk}/platform-tools/adb"
 

@@ -60,6 +60,37 @@ else
 fi
 echo ""
 
+# ── Sync app version from package.json ──────────────────────────────────────
+
+APP_VERSION=$(jq -r '.version' "$PROJECT_DIR/package.json")
+echo "Syncing app version: $APP_VERSION"
+
+if [ "$DRY_RUN" = true ]; then
+  echo "  [dry-run] Would update platform version strings to $APP_VERSION"
+else
+  # iOS: update MARKETING_VERSION in pbxproj
+  IOS_PBXPROJ="$PROJECT_DIR/ios/$IOS_APP_NAME.xcodeproj/project.pbxproj"
+  if [ -f "$IOS_PBXPROJ" ]; then
+    sed -i '' "s/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = $APP_VERSION;/g" "$IOS_PBXPROJ"
+    echo "  Updated iOS MARKETING_VERSION"
+  fi
+
+  # Android: update versionName in build.gradle
+  ANDROID_GRADLE="$PROJECT_DIR/android/app/build.gradle"
+  if [ -f "$ANDROID_GRADLE" ]; then
+    sed -i '' "s/versionName \"[^\"]*\"/versionName \"$APP_VERSION\"/" "$ANDROID_GRADLE"
+    echo "  Updated Android versionName"
+  fi
+
+  # macOS: update CFBundleShortVersionString in Info.plist
+  MACOS_PLIST="$PROJECT_DIR/macos/$IOS_APP_NAME-macOS/Info.plist"
+  if [ -f "$MACOS_PLIST" ]; then
+    /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" "$MACOS_PLIST"
+    echo "  Updated macOS CFBundleShortVersionString"
+  fi
+fi
+echo ""
+
 # ── iOS debug build ─────────────────────────────────────────────────────────
 
 IOS_DEBUG_APP="$BUILDS_DIR/debug/$IOS_APP_NAME.app"
@@ -204,6 +235,63 @@ if want_platform android && [ "$RELEASE" = true ]; then
       fi
       cp "$BUILT_AAB" "$ANDROID_RELEASE_AAB"
       echo "Android release AAB: $ANDROID_RELEASE_AAB"
+    fi
+  fi
+  echo ""
+fi
+
+# ── macOS release build ────────────────────────────────────────────────────
+
+MACOS_ARCHIVE="$BUILDS_DIR/release/$IOS_APP_NAME-macOS.xcarchive"
+MACOS_EXPORT_DIR="$BUILDS_DIR/release/macos-export"
+MACOS_EXPORT_OPTIONS="$APP_STORE_DIR/ExportOptions-macOS.plist"
+
+if want_platform macos && [ -n "$MACOS_SCHEME" ] && [ "$RELEASE" = true ]; then
+  if [ -d "$MACOS_ARCHIVE" ] && [ "$FORCE" = false ]; then
+    echo "macOS archive already exists: $MACOS_ARCHIVE"
+    echo "  (Use --force to rebuild.)"
+  else
+    echo "Building macOS release archive..."
+    if [ "$DRY_RUN" = true ]; then
+      echo "  [dry-run] Would run xcodebuild archive for macosx"
+      echo "  [dry-run] Would run xcodebuild -exportArchive"
+    else
+      rm -rf "$MACOS_ARCHIVE"
+
+      xcodebuild archive \
+        -workspace "$PROJECT_DIR/macos/$MACOS_WORKSPACE" \
+        -scheme "$MACOS_SCHEME" \
+        -configuration Release \
+        -archivePath "$MACOS_ARCHIVE" \
+        -quiet
+
+      if [ ! -d "$MACOS_ARCHIVE" ]; then
+        echo "Error: macOS archive failed."
+        exit 1
+      fi
+      echo "macOS archive: $MACOS_ARCHIVE"
+
+      if [ -f "$MACOS_EXPORT_OPTIONS" ]; then
+        echo "Exporting macOS archive..."
+        rm -rf "$MACOS_EXPORT_DIR"
+        mkdir -p "$MACOS_EXPORT_DIR"
+
+        if xcodebuild -exportArchive \
+          -archivePath "$MACOS_ARCHIVE" \
+          -exportPath "$MACOS_EXPORT_DIR" \
+          -exportOptionsPlist "$MACOS_EXPORT_OPTIONS" \
+          -quiet; then
+          echo "macOS export: $MACOS_EXPORT_DIR"
+        else
+          echo "Warning: macOS export failed (missing distribution certificate/profile?)."
+          echo "  The .xcarchive is still available at: $MACOS_ARCHIVE"
+          echo "  You can export manually from Xcode: open $MACOS_ARCHIVE"
+        fi
+      else
+        echo "No ExportOptions-macOS.plist found — skipping export."
+        echo "  The .xcarchive is available at: $MACOS_ARCHIVE"
+        echo "  You can export manually from Xcode: open $MACOS_ARCHIVE"
+      fi
     fi
   fi
   echo ""
