@@ -134,7 +134,7 @@ find_macos_app() {
       return 0
     fi
   done < <(find "$HOME/Library/Developer/Xcode/DerivedData" \
-    -name "${MACOS_APP_NAME}.app" -path "*/Debug/*" -maxdepth 6 2>/dev/null)
+    -name "${MACOS_APP_NAME}.app" -path "*/Debug/*" -not -path "*/Index.noindex/*" -maxdepth 6 2>/dev/null)
   return 1
 }
 
@@ -158,14 +158,18 @@ kill_macos_app() {
 # Capture a screenshot of the macOS app window
 capture_macos_screenshot() {
   local output="$1"
-  # Find the window ID via CGWindowListCopyWindowInfo — match by owner name
+  # Get the CGWindowID via CoreGraphics (screencapture -l requires this, not the System Events window ID)
   local wid
-  wid=$(osascript -e '
-    tell application "System Events"
-      set frontApp to name of first application process whose name is "'"$MACOS_APP_NAME"'"
-      set wid to id of first window of (first application process whose name is "'"$MACOS_APP_NAME"'")
-      return wid
-    end tell
+  wid=$(swift -e '
+    import CoreGraphics
+    let wl = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as! [[String: Any]]
+    for w in wl {
+      if let n = w["kCGWindowOwnerName"] as? String, n == "'"$MACOS_APP_NAME"'",
+         let l = w["kCGWindowLayer"] as? Int, l == 0 {
+        print(w["kCGWindowNumber"] as! Int)
+        break
+      }
+    }
   ' 2>/dev/null) || true
 
   if [ -n "$wid" ]; then
@@ -175,7 +179,6 @@ capture_macos_screenshot() {
     osascript -e 'tell application "'"$MACOS_APP_NAME"'" to activate' 2>/dev/null || true
     sleep 1
     screencapture -o -x "$output"
-    # Crop to just the window using sips (full screen capture minus menubar)
   fi
 }
 

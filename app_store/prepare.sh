@@ -286,7 +286,7 @@ if [ "$DEVICE_TYPE" = "native" ]; then
     sleep 1
     echo "Launching macOS app..."
     launch_macos_app
-    sleep 10
+    sleep 15
     echo "macOS app launched."
   fi
 
