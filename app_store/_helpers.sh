@@ -120,8 +120,8 @@ shutdown_simulator() {
 # Find the macOS .app build in DerivedData or builds dir.
 # macOS app bundles have Contents/MacOS/ (unlike iOS .app bundles).
 find_macos_app() {
-  # Check builds dir first
-  local builds_app="$BUILDS_DIR/debug/${MACOS_APP_NAME}.app"
+  # Check builds dir first (named with -macOS suffix to avoid collision with iOS)
+  local builds_app="$BUILDS_DIR/debug/${MACOS_APP_NAME}-macOS.app"
   if [ -d "$builds_app/Contents/MacOS" ]; then
     echo "$builds_app"
     return 0
@@ -173,7 +173,7 @@ capture_macos_screenshot() {
   ' 2>/dev/null) || true
 
   if [ -n "$wid" ]; then
-    screencapture -l "$wid" "$output"
+    screencapture -o -l "$wid" "$output"
   else
     # Fallback: bring app to front and capture the frontmost window
     osascript -e 'tell application "'"$MACOS_APP_NAME"'" to activate' 2>/dev/null || true
@@ -227,21 +227,38 @@ shutdown_emulator() {
 
 setup_adb_reverse() {
   local serial="$1"
-  local ports=("$METRO_PORT")
+  local ports="$METRO_PORT"
 
+  # All localhost ports from .env
   if [ -f "$PROJECT_DIR/.env" ]; then
-    local api_url
-    api_url=$(grep '^EXPO_PUBLIC_API_URL=' "$PROJECT_DIR/.env" | head -1 | sed 's/.*://' | tr -d '/')
-    if [ -n "$api_url" ] && [[ "$api_url" =~ ^[0-9]+$ ]]; then
-      ports+=("$api_url")
-    fi
+    local env_ports
+    env_ports=$(grep -oE 'localhost:[0-9]+' "$PROJECT_DIR/.env" 2>/dev/null | sed 's/localhost://' || true)
+    [ -n "$env_ports" ] && ports="$ports"$'\n'"$env_ports"
   fi
 
-  for port in "${ports[@]}"; do
+  # All localhost ports from .env.merged
+  if [ -f "$PROJECT_DIR/.env.merged" ]; then
+    local merged_ports
+    merged_ports=$(grep -oE 'localhost:[0-9]+' "$PROJECT_DIR/.env.merged" 2>/dev/null | sed 's/localhost://' || true)
+    [ -n "$merged_ports" ] && ports="$ports"$'\n'"$merged_ports"
+  fi
+
+  # All localhost ports from paths.json (URL-encoded or plain)
+  if [ -f "$PATHS_JSON" ]; then
+    local path_ports
+    path_ports=$(jq -r '.[]' "$PATHS_JSON" 2>/dev/null | grep -oE 'localhost(%3A|:)[0-9]+' | grep -oE '[0-9]+$' || true)
+    [ -n "$path_ports" ] && ports="$ports"$'\n'"$path_ports"
+  fi
+
+  # Deduplicate and forward
+  local unique_ports
+  unique_ports=$(echo "$ports" | sort -u)
+  while IFS= read -r port; do
+    [ -z "$port" ] && continue
     "$ADB" -s "$serial" reverse tcp:"$port" tcp:"$port" &>/dev/null && \
       echo "  Forwarded port $port on $serial" || \
       echo "  Warning: Failed to forward port $port on $serial"
-  done
+  done <<< "$unique_ports"
 }
 
 # ── Metro bundler ────────────────────────────────────────────────────────────

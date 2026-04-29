@@ -258,15 +258,15 @@ fi
 # ── macOS ───────────────────────────────────────────────────────────────────
 
 if [ "$DEVICE_TYPE" = "native" ]; then
-  # Build if needed
+  # Check for pre-built debug app (from build.sh)
   if [ "$SKIP_INSTALL" = false ]; then
     MACOS_APP=$(find_macos_app 2>/dev/null) || true
 
-    if [ -z "$MACOS_APP" ] || [ "$SKIP_INSTALL" = false ]; then
+    if [ -z "$MACOS_APP" ]; then
       if [ "$DRY_RUN" = true ]; then
         echo "[dry-run] Would build macOS app"
       else
-        echo "Building macOS app..."
+        echo "macOS debug build not found. Building..."
         xcodebuild \
           -workspace "$PROJECT_DIR/macos/$MACOS_WORKSPACE" \
           -scheme "$MACOS_SCHEME" \
@@ -275,6 +275,8 @@ if [ "$DEVICE_TYPE" = "native" ]; then
           build
         echo "macOS app built."
       fi
+    else
+      echo "Using pre-built macOS app: $MACOS_APP"
     fi
   fi
 

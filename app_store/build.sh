@@ -240,6 +240,48 @@ if want_platform android && [ "$RELEASE" = true ]; then
   echo ""
 fi
 
+# ── macOS debug build ──────────────────────────────────────────────────────
+
+MACOS_DEBUG_APP="$BUILDS_DIR/debug/${MACOS_APP_NAME:-$IOS_APP_NAME}-macOS.app"
+
+if want_platform macos && [ -n "$MACOS_SCHEME" ] && [ "$DEBUG" = true ]; then
+  if [ -d "$MACOS_DEBUG_APP/Contents/MacOS" ] && [ "$FORCE" = false ]; then
+    echo "macOS debug build already exists: $MACOS_DEBUG_APP"
+    echo "  (Use --force to rebuild.)"
+  else
+    echo "Building macOS debug..."
+    if [ "$DRY_RUN" = true ]; then
+      echo "  [dry-run] Would run xcodebuild build for macOS debug"
+    else
+      # Use default Xcode DerivedData to avoid conflicts with iOS build paths
+      xcodebuild \
+        -workspace "$PROJECT_DIR/macos/$MACOS_WORKSPACE" \
+        -scheme "$MACOS_SCHEME" \
+        -configuration Debug \
+        -quiet \
+        build
+
+      # Find the .app in Xcode's default DerivedData (macOS bundles have Contents/MacOS)
+      BUILT_APP=""
+      while IFS= read -r candidate; do
+        if [ -d "$candidate/Contents/MacOS" ]; then
+          BUILT_APP="$candidate"
+          break
+        fi
+      done < <(find "$HOME/Library/Developer/Xcode/DerivedData" -name "${MACOS_APP_NAME:-$IOS_APP_NAME}.app" -path "*/Debug/*" -not -path "*/Index.noindex/*" -maxdepth 6 2>/dev/null)
+
+      if [ -z "$BUILT_APP" ]; then
+        echo "Error: macOS debug build succeeded but could not find .app"
+        exit 1
+      fi
+      rm -rf "$MACOS_DEBUG_APP"
+      cp -R "$BUILT_APP" "$MACOS_DEBUG_APP"
+      echo "macOS debug build: $MACOS_DEBUG_APP"
+    fi
+  fi
+  echo ""
+fi
+
 # ── macOS release build ────────────────────────────────────────────────────
 
 MACOS_ARCHIVE="$BUILDS_DIR/release/$IOS_APP_NAME-macOS.xcarchive"

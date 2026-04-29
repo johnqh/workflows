@@ -7,8 +7,9 @@
 #   capture_raw.sh [options]
 #
 # Options:
-#   --platform <name>   Filter platforms (ios, ipados, android). Repeatable.
+#   --platforms <list>  Comma-separated platforms (ios,ipados,android,macos).
 #   --device <key>      Filter device keys. Repeatable.
+#   --languages <list>  Comma-separated language codes (e.g. vi,zh,zh-Hant).
 #   --orientation <o>   landscape (default) or portrait. Landscape only applies to tablets.
 #   --delay <seconds>   Seconds to wait before each capture (default: 8).
 #   --skip-build        Skip build step entirely.
@@ -24,6 +25,7 @@ require_jq
 
 declare -a PLATFORMS=()
 declare -a DEVICES=()
+LANGUAGES_FILTER=""
 ORIENTATION="landscape"
 DELAY=8
 SKIP_BUILD=false
@@ -32,8 +34,10 @@ DRY_RUN=false
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --platform)      PLATFORMS+=("$2"); shift 2 ;;
+    --platforms)     IFS=',' read -ra PLATFORMS <<< "$2"; shift 2 ;;
+    --platform)      IFS=',' read -ra PLATFORMS <<< "$2"; shift 2 ;;
     --device)        DEVICES+=("$2"); shift 2 ;;
+    --languages)     LANGUAGES_FILTER="$2"; shift 2 ;;
     --orientation)   ORIENTATION="$2"; shift 2 ;;
     --delay)         DELAY="$2"; shift 2 ;;
     --skip-build)    SKIP_BUILD=true; shift ;;
@@ -58,9 +62,19 @@ else
   echo "══════════════════════════════════════════════════════════════"
   echo ""
 
-  build_flags=()
-  [ "$SKIP_RELEASE" = true ] && build_flags+=("--debug-only")
+  build_flags=("--debug-only")
   [ "$DRY_RUN" = true ] && build_flags+=("--dry-run")
+
+  # Only build platforms being captured
+  if [ ${#PLATFORMS[@]} -gt 0 ]; then
+    for p in "${PLATFORMS[@]}"; do
+      # Map ipados to ios for build (same Xcode project)
+      case "$p" in
+        ipados) build_flags+=("--platform" "ios") ;;
+        *)      build_flags+=("--platform" "$p") ;;
+      esac
+    done
+  fi
 
   "$SCRIPT_DIR/build.sh" "${build_flags[@]}"
   echo ""
@@ -149,7 +163,9 @@ for device_key in "${DEVICE_KEYS[@]}"; do
 
   # ── Capture screenshots
   echo "--- Capturing screenshots for $device_key ---"
-  if ! "$SCRIPT_DIR/capture.sh" --device "$device_key" --orientation "$ORIENTATION" --delay "$DELAY" $DRY_RUN_FLAG; then
+  LANG_FLAG=""
+  [ -n "$LANGUAGES_FILTER" ] && LANG_FLAG="--languages $LANGUAGES_FILTER"
+  if ! "$SCRIPT_DIR/capture.sh" --device "$device_key" --orientation "$ORIENTATION" --delay "$DELAY" $LANG_FLAG $DRY_RUN_FLAG; then
     echo "  Error: capture.sh failed for $device_key."
     failed_devices+=("$device_key")
   fi

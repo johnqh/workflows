@@ -11,6 +11,7 @@
 # Options:
 #   --device <key>      Device key from screens.json (required).
 #   --orientation <o>   landscape (default) or portrait. Landscape rotates tablet screenshots.
+#   --languages <list>  Comma-separated language codes to capture (default: all).
 #   --delay <seconds>   Seconds to wait before capture (default: 8).
 #   --dry-run           Print actions without executing.
 
@@ -23,6 +24,7 @@ require_jq
 
 DEVICE_KEY=""
 ORIENTATION="landscape"
+LANGUAGES_FILTER=""
 DELAY=8
 DRY_RUN=false
 
@@ -30,6 +32,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --device)       DEVICE_KEY="$2"; shift 2 ;;
     --orientation)  ORIENTATION="$2"; shift 2 ;;
+    --languages)    LANGUAGES_FILTER="$2"; shift 2 ;;
     --delay)        DELAY="$2"; shift 2 ;;
     --dry-run)      DRY_RUN=true; shift ;;
     -*)         echo "Unknown option: $1"; exit 1 ;;
@@ -89,15 +92,30 @@ fi
 
 # ── Load languages and paths ────────────────────────────────────────────────
 
-LANGUAGES=()
-while IFS= read -r line; do LANGUAGES+=("$line"); done < <(jq -r '.[]' "$LANGUAGES_JSON")
+ALL_LANGUAGES=()
+while IFS= read -r line; do ALL_LANGUAGES+=("$line"); done < <(jq -r '.[]' "$LANGUAGES_JSON")
+
+# Filter languages if --languages was specified
+if [ -n "$LANGUAGES_FILTER" ]; then
+  IFS=',' read -ra LANG_FILTER_ARR <<< "$LANGUAGES_FILTER"
+  LANGUAGES=()
+  for lang in "${LANG_FILTER_ARR[@]}"; do
+    LANGUAGES+=("$lang")
+  done
+else
+  LANGUAGES=("${ALL_LANGUAGES[@]}")
+fi
 
 PATHS=()
 while IFS= read -r line; do PATHS+=("$line"); done < <(jq -r '.[]' "$PATHS_JSON")
 
+# Read loop order from info.json (default: languages_first)
+LOOP_ORDER=$(jq -r '.capture.loopOrder // "languages_first"' "$INFO_JSON")
+
 echo "Languages: ${LANGUAGES[*]}"
 echo "Paths:     ${#PATHS[@]} entries"
 echo "Delay:     ${DELAY}s"
+echo "Loop:      ${LOOP_ORDER}"
 echo ""
 
 # ── Capture functions ────────────────────────────────────────────────────────
@@ -137,13 +155,9 @@ echo "━━━ Capturing $total screenshots for $DEVICE_KEY ━━━"
 # Language switching is handled entirely via deep links — no device locale change
 # needed. This avoids restarting the app (which would lose iPad landscape orientation).
 
-for lang in "${LANGUAGES[@]}"; do
-  out_dir="$APP_STORE_DIR/screenshots/raw/$DEVICE_KEY/$lang"
-  mkdir -p "$out_dir"
-  seq=0
-
-  # Switch app language via deep link before capturing screenshots
-  lang_url="${SCHEME}:///${lang}/"
+switch_language() {
+  local lang="$1"
+  local lang_url="${SCHEME}:///${lang}/"
   if [ "$DRY_RUN" = true ]; then
     echo "  [dry-run] Would switch language to $lang"
   else
@@ -155,41 +169,70 @@ for lang in "${LANGUAGES[@]}"; do
     elif [ "$DEVICE_TYPE" = "native" ]; then
       open_macos_deeplink "$lang_url"
     fi
-    sleep "$DELAY"
-  fi
-
-  for path in "${PATHS[@]}"; do
-    seq=$((seq + 1))
-    count=$((count + 1))
-    url="${SCHEME}:///${lang}${path}"
-    output="$out_dir/${seq}.png"
-
-    if [ "$DRY_RUN" = true ]; then
-      echo "  [$count/$total] [$lang] $url → $output"
+    # macOS needs extra time for RTL/LTR switches that trigger a bridge reload
+    if [ "$DEVICE_TYPE" = "native" ]; then
+      sleep $(( DELAY * 2 ))
     else
-      echo "  [$count/$total] [$lang] ${seq}.png"
-      if [ "$DEVICE_TYPE" = "simulator" ]; then
-        capture_ios "$UDID" "$url" "$output"
-        # iOS simulator captures in native portrait buffer; rotate for landscape
-        if [ "$ORIENTATION" = "landscape" ] && is_tablet_device "$DEVICE_KEY"; then
+      sleep "$DELAY"
+    fi
+  fi
+}
+
+capture_screenshot() {
+  local lang="$1" path="$2" seq="$3"
+  local url="${SCHEME}:///${lang}${path}"
+  local out_dir="$APP_STORE_DIR/screenshots/raw/$DEVICE_KEY/$lang"
+  mkdir -p "$out_dir"
+  local output="$out_dir/${seq}.png"
+
+  count=$((count + 1))
+  if [ "$DRY_RUN" = true ]; then
+    echo "  [$count/$total] [$lang] $url → $output"
+  else
+    echo "  [$count/$total] [$lang] ${seq}.png"
+    if [ "$DEVICE_TYPE" = "simulator" ]; then
+      capture_ios "$UDID" "$url" "$output"
+      if [ "$ORIENTATION" = "landscape" ] && is_tablet_device "$DEVICE_KEY"; then
+        rotate_screenshot_landscape "$output"
+      fi
+    elif [ "$DEVICE_TYPE" = "native" ]; then
+      capture_macos "$url" "$output"
+    else
+      capture_android "$SERIAL" "$url" "$output"
+      if [ "$ORIENTATION" = "landscape" ] && is_tablet_device "$DEVICE_KEY"; then
+        img_w=$(sips -g pixelWidth "$output" 2>/dev/null | awk '/pixelWidth/{print $2}')
+        img_h=$(sips -g pixelHeight "$output" 2>/dev/null | awk '/pixelHeight/{print $2}')
+        if [ -n "$img_w" ] && [ -n "$img_h" ] && [ "$img_h" -gt "$img_w" ]; then
           rotate_screenshot_landscape "$output"
-        fi
-      elif [ "$DEVICE_TYPE" = "native" ]; then
-        capture_macos "$url" "$output"
-      else
-        capture_android "$SERIAL" "$url" "$output"
-        # Android tablets: if orientation is landscape but screencap is portrait, rotate
-        if [ "$ORIENTATION" = "landscape" ] && is_tablet_device "$DEVICE_KEY"; then
-          img_w=$(sips -g pixelWidth "$output" 2>/dev/null | awk '/pixelWidth/{print $2}')
-          img_h=$(sips -g pixelHeight "$output" 2>/dev/null | awk '/pixelHeight/{print $2}')
-          if [ -n "$img_w" ] && [ -n "$img_h" ] && [ "$img_h" -gt "$img_w" ]; then
-            rotate_screenshot_landscape "$output"
-          fi
         fi
       fi
     fi
+  fi
+}
+
+if [ "$LOOP_ORDER" = "paths_first" ]; then
+  # Outer: paths, inner: languages — best when each path loads heavy content
+  # (e.g. images) and language switches are lightweight.
+  for path_idx in "${!PATHS[@]}"; do
+    path="${PATHS[$path_idx]}"
+    seq=$((path_idx + 1))
+    for lang in "${LANGUAGES[@]}"; do
+      switch_language "$lang"
+      capture_screenshot "$lang" "$path" "$seq"
+    done
   done
-done
+else
+  # Default (languages_first): outer: languages, inner: paths — switch language
+  # once, then capture all paths before moving to the next language.
+  for lang in "${LANGUAGES[@]}"; do
+    switch_language "$lang"
+    seq=0
+    for path in "${PATHS[@]}"; do
+      seq=$((seq + 1))
+      capture_screenshot "$lang" "$path" "$seq"
+    done
+  done
+fi
 
 echo ""
 echo "Done. $count screenshots captured for $DEVICE_KEY."

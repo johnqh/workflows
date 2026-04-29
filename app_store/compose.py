@@ -55,14 +55,23 @@ AVENIR_NEXT = "/System/Library/Fonts/Avenir Next.ttc"
 AVENIR_HEAVY_INDEX = 8
 AVENIR_DEMIBOLD_INDEX = 2
 
+# Arial Unicode covers Arabic, CJK, Thai, Cyrillic, Ukrainian, etc.
+ARIAL_UNICODE = "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"
+
 FALLBACK_FONTS = [
     "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
 ]
 
+# Languages that need a Unicode font instead of Avenir Next
+NON_LATIN_LANGUAGES = {"ar", "ja", "ko", "ru", "th", "uk", "vi", "zh", "zh-hant", "zh-Hant"}
 
-def load_font(size, weight="heavy"):
-    """Load a font at the given size. Weight: 'heavy' or 'demibold'."""
+
+def load_font(size, weight="heavy", lang=None):
+    """Load a font at the given size. Weight: 'heavy' or 'demibold'. Uses Arial Unicode for non-Latin scripts."""
+    if lang and lang in NON_LATIN_LANGUAGES:
+        if os.path.exists(ARIAL_UNICODE):
+            return ImageFont.truetype(ARIAL_UNICODE, size)
     index = AVENIR_DEMIBOLD_INDEX if weight == "demibold" else AVENIR_HEAVY_INDEX
     if os.path.exists(AVENIR_NEXT):
         return ImageFont.truetype(AVENIR_NEXT, size, index=index)
@@ -70,6 +79,19 @@ def load_font(size, weight="heavy"):
         if os.path.exists(fb):
             return ImageFont.truetype(fb, size)
     return ImageFont.load_default()
+
+
+def prepare_text(text, lang=None):
+    """Reshape and reorder text for proper rendering (Arabic RTL, etc.)."""
+    if lang == "ar":
+        try:
+            import arabic_reshaper
+            from bidi.algorithm import get_display
+            reshaped = arabic_reshaper.reshape(text)
+            return get_display(reshaped)
+        except ImportError:
+            pass
+    return text
 
 
 # ── Device configurations ───────────────────────────────────────────────────
@@ -86,8 +108,12 @@ class DeviceConfig:
         return "phone" in self.key or "iphone" in self.key
 
     @property
+    def is_desktop(self):
+        return "macos" in self.key or "desktop" in self.key
+
+    @property
     def is_tablet(self):
-        return "ipad" in self.key or "tablet" in self.key
+        return "ipad" in self.key or "tablet" in self.key or self.is_desktop
 
 
 # ── Frame loading ───────────────────────────────────────────────────────────
@@ -313,15 +339,18 @@ def wrap_text(text, font, max_width, draw):
     return lines
 
 
-def draw_text_block(canvas, title, subtitle, area, config):
+def draw_text_block(canvas, title, subtitle, area, config, lang=None):
     """Draw title and subtitle text within the given area (x, y, w, h) with word wrapping."""
     ax, ay, aw, ah = area
+
+    title = prepare_text(title, lang)
+    subtitle = prepare_text(subtitle, lang)
 
     title_size = int(config.canvas_h * 0.065) if config.is_landscape else int(config.canvas_h * 0.048)
     sub_size = int(config.canvas_h * 0.038) if config.is_landscape else int(config.canvas_h * 0.028)
 
-    title_font = load_font(title_size, "heavy")
-    sub_font = load_font(sub_size, "demibold")
+    title_font = load_font(title_size, "heavy", lang)
+    sub_font = load_font(sub_size, "demibold", lang)
 
     overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
@@ -409,7 +438,7 @@ def add_shadow(img, blur=12, offset=6, opacity=50):
     return result
 
 
-def compose_screenshot(raw_path, title, subtitle, config, frames_dir, frame_configs, seq=1, color_name=None):
+def compose_screenshot(raw_path, title, subtitle, config, frames_dir, frame_configs, seq=1, color_name=None, lang=None):
     """Compose a single store-ready screenshot."""
     raw = Image.open(raw_path).convert("RGBA")
     cw, ch = config.canvas_w, config.canvas_h
@@ -419,21 +448,25 @@ def compose_screenshot(raw_path, title, subtitle, config, frames_dir, frame_conf
     bg = make_background(cw, ch, seq, color_name)
 
     # 2. Round the raw screenshot corners and add shadow
-    radius_pct = 0.08 if config.is_phone else 0.04
-    corner_r = max(int(min(rw, rh) * radius_pct), 16)
-    shadow_blur = max(int(min(rw, rh) * 0.01), 8)
-    rounded = round_screenshot(raw, corner_r)
-    shadowed = add_shadow(rounded, blur=shadow_blur, offset=shadow_blur // 2, opacity=50)
+    #    Desktop raw screenshots already have window chrome with transparency —
+    #    skip rounding/shadow and let the alpha composite onto the gradient.
+    if config.is_desktop:
+        shadowed = raw
+    else:
+        radius_pct = 0.08 if config.is_phone else 0.04
+        corner_r = max(int(min(rw, rh) * radius_pct), 16)
+        shadow_blur = max(int(min(rw, rh) * 0.01), 8)
+        rounded = round_screenshot(raw, corner_r)
+        shadowed = add_shadow(rounded, blur=shadow_blur, offset=shadow_blur // 2, opacity=50)
 
     # 3. Layout
     sw, sh = shadowed.size
 
     if config.is_landscape:
-        # Tablets: text at top-left, large tilted screenshot toward bottom-right
+        # Tablets/desktop: text at top-left, large tilted screenshot toward bottom-right
         text_area = (int(cw * 0.04), int(ch * 0.06), int(cw * 0.40), int(ch * 0.40))
 
-        # Scale screenshot to ~95% of canvas height
-        shot_max_h = int(ch * 0.95)
+        shot_max_h = int(ch * 1.0) if config.is_desktop else int(ch * 0.95)
         scale = shot_max_h / sh
         scaled = shadowed.resize((int(sw * scale), int(sh * scale)), Image.LANCZOS)
 
@@ -461,7 +494,7 @@ def compose_screenshot(raw_path, title, subtitle, config, frames_dir, frame_conf
     bg.paste(shot_img, (dx, dy), shot_img)
 
     # 5. Draw text
-    bg = draw_text_block(bg, title, subtitle, text_area, config)
+    bg = draw_text_block(bg, title, subtitle, text_area, config, lang=lang)
 
     return bg
 
@@ -488,9 +521,22 @@ def process_all(app_store_dir, languages, device_keys, seq_filter, frames_dir, f
     composed = 0
 
     for lang in languages:
-        lang_screens_path = os.path.join(app_store_dir, lang, "screens.json")
+        # Try multiple locations for per-language screen text
+        lang_screens_path = os.path.join(app_store_dir, "screenshots", "info", lang, "screens.json")
         if not os.path.exists(lang_screens_path):
-            print(f"  Warning: {lang_screens_path} not found, skipping language '{lang}'.")
+            lang_screens_path = os.path.join(app_store_dir, lang, "screens.json")
+        if not os.path.exists(lang_screens_path):
+            # Try case-insensitive match (e.g. zh-Hant vs zh-hant)
+            info_dir = os.path.join(app_store_dir, "screenshots", "info")
+            if os.path.isdir(info_dir):
+                for d in os.listdir(info_dir):
+                    if d.lower() == lang.lower():
+                        candidate = os.path.join(info_dir, d, "screens.json")
+                        if os.path.exists(candidate):
+                            lang_screens_path = candidate
+                            break
+        if not os.path.exists(lang_screens_path):
+            print(f"  Warning: screens.json not found for '{lang}', skipping.")
             continue
         with open(lang_screens_path) as f:
             screens_text = json.load(f)
@@ -500,8 +546,11 @@ def process_all(app_store_dir, languages, device_keys, seq_filter, frames_dir, f
                 print(f"  Warning: device '{device_key}' not in screens.json, skipping.")
                 continue
 
-            raw_dir = os.path.join(app_store_dir, lang, "screenshots", "raw", device_key)
-            out_dir = os.path.join(app_store_dir, lang, "screenshots", "store", device_key)
+            # Try multiple raw directory layouts
+            raw_dir = os.path.join(app_store_dir, "screenshots", "raw", device_key, lang)
+            if not os.path.isdir(raw_dir):
+                raw_dir = os.path.join(app_store_dir, lang, "screenshots", "raw", device_key)
+            out_dir = os.path.join(app_store_dir, "screenshots", "store", device_key, lang)
 
             if not os.path.isdir(raw_dir):
                 print(f"  Warning: raw dir not found: {raw_dir}, skipping.")
@@ -530,6 +579,15 @@ def process_all(app_store_dir, languages, device_keys, seq_filter, frames_dir, f
                     continue
 
                 text_entry = screens_text[seq - 1]
+                if text_entry is None:
+                    # Fall back to English text if translation is missing
+                    en_path = os.path.join(app_store_dir, "screenshots", "info", "en", "screens.json")
+                    if not os.path.exists(en_path):
+                        en_path = os.path.join(app_store_dir, "en", "screens.json")
+                    if os.path.exists(en_path) and seq - 1 < len(json.load(open(en_path))):
+                        text_entry = json.load(open(en_path))[seq - 1]
+                    if text_entry is None:
+                        text_entry = {}
                 title = text_entry.get("title", "")
                 subtitle = text_entry.get("text", "")
                 raw_path = os.path.join(raw_dir, raw_file)
@@ -546,7 +604,7 @@ def process_all(app_store_dir, languages, device_keys, seq_filter, frames_dir, f
 
                 print(f"  [{lang}] {device_key}/{raw_file} — composing...")
                 os.makedirs(out_dir, exist_ok=True)
-                result = compose_screenshot(raw_path, title, subtitle, config, frames_dir, frame_configs, seq=seq, color_name=color_name)
+                result = compose_screenshot(raw_path, title, subtitle, config, frames_dir, frame_configs, seq=seq, color_name=color_name, lang=lang)
                 result.convert("RGB").save(out_path, "PNG", optimize=True)
                 composed += 1
 
