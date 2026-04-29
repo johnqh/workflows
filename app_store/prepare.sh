@@ -60,6 +60,7 @@ else
   case "$DEVICE_TYPE" in
     simulator) wait_for_bundle_compiled "ios" ;;
     emulator)  wait_for_bundle_compiled "android" ;;
+    native)    wait_for_bundle_compiled "macos" ;;
   esac
 fi
 echo ""
@@ -252,4 +253,43 @@ if [ "$DEVICE_TYPE" = "emulator" ]; then
 
   echo ""
   echo "Device ready: $DEVICE_KEY ($DEVICE_NAME, $SERIAL)"
+fi
+
+# ── macOS ───────────────────────────────────────────────────────────────────
+
+if [ "$DEVICE_TYPE" = "native" ]; then
+  # Build if needed
+  if [ "$SKIP_INSTALL" = false ]; then
+    MACOS_APP=$(find_macos_app 2>/dev/null) || true
+
+    if [ -z "$MACOS_APP" ] || [ "$SKIP_INSTALL" = false ]; then
+      if [ "$DRY_RUN" = true ]; then
+        echo "[dry-run] Would build macOS app"
+      else
+        echo "Building macOS app..."
+        xcodebuild \
+          -workspace "$PROJECT_DIR/macos/$MACOS_WORKSPACE" \
+          -scheme "$MACOS_SCHEME" \
+          -configuration Debug \
+          -quiet \
+          build
+        echo "macOS app built."
+      fi
+    fi
+  fi
+
+  # Launch
+  if [ "$DRY_RUN" = true ]; then
+    echo "[dry-run] Would launch macOS app"
+  else
+    kill_macos_app
+    sleep 1
+    echo "Launching macOS app..."
+    launch_macos_app
+    sleep 10
+    echo "macOS app launched."
+  fi
+
+  echo ""
+  echo "Device ready: $DEVICE_KEY (macOS native)"
 fi

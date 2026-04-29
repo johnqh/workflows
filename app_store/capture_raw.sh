@@ -74,6 +74,7 @@ for platform in $(jq -r 'keys[]' "$SCREENS_JSON"); do
   case "$platform" in
     ios|ipados) device_type="simulator" ;;
     android)    device_type="emulator" ;;
+    macos)      device_type="native" ;;
     *)          continue ;;
   esac
 
@@ -82,8 +83,14 @@ for platform in $(jq -r 'keys[]' "$SCREENS_JSON"); do
   for device_key in $(jq -r --arg p "$platform" '.[$p] | keys[]' "$SCREENS_JSON"); do
     device_selected "$device_key" "${DEVICES[@]}" || continue
 
-    device_name=$(jq -r --arg p "$platform" --arg d "$device_key" \
-      '.[$p][$d].'"$device_type"' // empty' "$SCREENS_JSON")
+    if [ "$device_type" = "native" ]; then
+      # macOS native app — just check the key exists
+      device_name=$(jq -r --arg p "$platform" --arg d "$device_key" \
+        '.[$p][$d].app // empty' "$SCREENS_JSON")
+    else
+      device_name=$(jq -r --arg p "$platform" --arg d "$device_key" \
+        '.[$p][$d].'"$device_type"' // empty' "$SCREENS_JSON")
+    fi
 
     [ -z "$device_name" ] || [ "$device_name" = "null" ] && continue
 
@@ -165,6 +172,8 @@ for device_key in "${DEVICE_KEYS[@]}"; do
         # Wait for emulator process to fully exit before booting the next one
         sleep 5
       fi
+    elif [ "$local_type" = "native" ]; then
+      kill_macos_app
     fi
   fi
 

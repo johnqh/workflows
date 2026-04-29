@@ -59,6 +59,8 @@ if [ "$DRY_RUN" = true ]; then
   elif [ "$DEVICE_TYPE" = "emulator" ]; then
     SERIAL=$(find_running_avd_serial "$DEVICE_NAME" 2>/dev/null || true)
     echo "Using emulator: $DEVICE_NAME (${SERIAL:-dry-run})"
+  elif [ "$DEVICE_TYPE" = "native" ]; then
+    echo "Using native macOS app (dry-run)"
   fi
 elif [ "$DEVICE_TYPE" = "simulator" ]; then
   UDID=$(find_simulator_udid "$DEVICE_NAME")
@@ -77,6 +79,12 @@ elif [ "$DEVICE_TYPE" = "emulator" ]; then
     exit 1
   fi
   echo "Using emulator: $DEVICE_NAME ($SERIAL)"
+elif [ "$DEVICE_TYPE" = "native" ]; then
+  if ! is_macos_app_running; then
+    echo "Error: macOS app is not running. Run prepare.sh first."
+    exit 1
+  fi
+  echo "Using native macOS app"
 fi
 
 # ── Load languages and paths ────────────────────────────────────────────────
@@ -112,6 +120,13 @@ capture_android() {
   "$ADB" -s "$serial" exec-out screencap -p > "$output"
 }
 
+capture_macos() {
+  local url="$1" output="$2"
+  open_macos_deeplink "$url"
+  sleep "$DELAY"
+  capture_macos_screenshot "$output"
+}
+
 # ── Iterate languages × paths ───────────────────────────────────────────────
 
 total=$(( ${#LANGUAGES[@]} * ${#PATHS[@]} ))
@@ -135,8 +150,10 @@ for lang in "${LANGUAGES[@]}"; do
     echo "  Switching to $lang..."
     if [ "$DEVICE_TYPE" = "simulator" ]; then
       xcrun simctl openurl "$UDID" "$lang_url"
-    else
+    elif [ "$DEVICE_TYPE" = "emulator" ]; then
       "$ADB" -s "$SERIAL" shell am start -a android.intent.action.VIEW -d "'$lang_url'" &>/dev/null
+    elif [ "$DEVICE_TYPE" = "native" ]; then
+      open_macos_deeplink "$lang_url"
     fi
     sleep "$DELAY"
   fi
@@ -157,6 +174,8 @@ for lang in "${LANGUAGES[@]}"; do
         if [ "$ORIENTATION" = "landscape" ] && is_tablet_device "$DEVICE_KEY"; then
           rotate_screenshot_landscape "$output"
         fi
+      elif [ "$DEVICE_TYPE" = "native" ]; then
+        capture_macos "$url" "$output"
       else
         capture_android "$SERIAL" "$url" "$output"
         # Android tablets: if orientation is landscape but screencap is portrait, rotate

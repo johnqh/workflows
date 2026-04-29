@@ -25,6 +25,7 @@ IOS_APP_NAME=$(jq -r '.build.ios.appName // .app.name' "$INFO_JSON")
 IOS_WORKSPACE=$(jq -r '.build.ios.workspace // (.build.ios.appName // .app.name) + ".xcworkspace"' "$INFO_JSON")
 IOS_SCHEME=$(jq -r '.build.ios.scheme // .build.ios.appName // .app.name' "$INFO_JSON")
 
+MACOS_APP_NAME=$(jq -r '.build.macos.appName // .build.ios.appName // .app.name' "$INFO_JSON")
 MACOS_WORKSPACE=$(jq -r '.build.macos.workspace // .build.ios.workspace // (.build.ios.appName // .app.name) + ".xcworkspace"' "$INFO_JSON")
 MACOS_SCHEME=$(jq -r '.build.macos.scheme // empty' "$INFO_JSON")
 
@@ -52,17 +53,35 @@ resolve_device_key() {
     case "$platform" in
       ios|ipados) type="simulator" ;;
       android)    type="emulator" ;;
+      macos)      type="native" ;;
       *)          continue ;;
     esac
 
-    local name
-    name=$(jq -r --arg p "$platform" --arg d "$key" '.[$p][$d].'"$type"' // empty' "$SCREENS_JSON" 2>/dev/null)
+    # Check if this device key exists under this platform
+    local device_exists
+    device_exists=$(jq -r --arg p "$platform" --arg d "$key" '.[$p][$d] // empty' "$SCREENS_JSON" 2>/dev/null)
+    [ -z "$device_exists" ] && continue
 
-    if [ -n "$name" ] && [ "$name" != "null" ]; then
-      DEVICE_PLATFORM="$platform"
-      DEVICE_TYPE="$type"
-      DEVICE_NAME="$name"
-      return 0
+    if [ "$type" = "native" ]; then
+      # macOS native app — no simulator/emulator name needed
+      local app_field
+      app_field=$(jq -r --arg p "$platform" --arg d "$key" '.[$p][$d].app // empty' "$SCREENS_JSON" 2>/dev/null)
+      if [ "$app_field" = "native" ]; then
+        DEVICE_PLATFORM="$platform"
+        DEVICE_TYPE="native"
+        DEVICE_NAME="macOS"
+        return 0
+      fi
+    else
+      local name
+      name=$(jq -r --arg p "$platform" --arg d "$key" '.[$p][$d].'"$type"' // empty' "$SCREENS_JSON" 2>/dev/null)
+
+      if [ -n "$name" ] && [ "$name" != "null" ]; then
+        DEVICE_PLATFORM="$platform"
+        DEVICE_TYPE="$type"
+        DEVICE_NAME="$name"
+        return 0
+      fi
     fi
   done
 
@@ -94,6 +113,58 @@ shutdown_simulator() {
   local udid="$1"
   echo "Shutting down simulator $udid..."
   xcrun simctl shutdown "$udid" 2>/dev/null || true
+}
+
+# ── macOS helpers ───────────────────────────────────────────────────────────
+
+# Find the macOS .app build in DerivedData or builds dir
+find_macos_app() {
+  # Check builds dir first
+  local builds_app="$BUILDS_DIR/debug/${MACOS_APP_NAME}.app"
+  if [ -d "$builds_app" ]; then
+    echo "$builds_app"
+    return 0
+  fi
+  # Fall back to DerivedData
+  local derived
+  derived=$(find "$HOME/Library/Developer/Xcode/DerivedData" \
+    -name "${MACOS_APP_NAME}.app" -path "*/Debug/*" -maxdepth 6 2>/dev/null | head -1)
+  if [ -n "$derived" ]; then
+    echo "$derived"
+    return 0
+  fi
+  return 1
+}
+
+# Check if the macOS app is running
+is_macos_app_running() {
+  pgrep -xq "$MACOS_APP_NAME"
+}
+
+# Launch the macOS app
+launch_macos_app() {
+  local app_path
+  app_path=$(find_macos_app) || { echo "Error: macOS app not found."; return 1; }
+  open "$app_path"
+}
+
+# Kill the macOS app
+kill_macos_app() {
+  pkill -x "$MACOS_APP_NAME" 2>/dev/null || true
+}
+
+# Capture a screenshot of the macOS app window
+capture_macos_screenshot() {
+  local output="$1"
+  # Capture the frontmost window of the app
+  screencapture -l "$(osascript -e "tell app \"$MACOS_APP_NAME\" to id of window 1")" "$output" 2>/dev/null \
+    || screencapture -w "$output"
+}
+
+# Open a deep link URL on macOS
+open_macos_deeplink() {
+  local url="$1"
+  open "$url"
 }
 
 # ── Android helpers ──────────────────────────────────────────────────────────
