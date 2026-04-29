@@ -1,0 +1,178 @@
+#!/bin/bash
+# Submit app to Apple App Store.
+#
+# Reads version from package.json, checks against live App Store version,
+# uploads build + metadata, and optionally screenshots.
+#
+# Usage:
+#   submit.sh [options]
+#
+# Options:
+#   --platforms <list>   Comma-separated platforms: apple (default: apple).
+#   --screenshots        Upload composed store screenshots.
+#   --skip-build         Skip build step (assume IPA exists).
+#   --dry-run            Print actions without executing.
+
+set -eo pipefail
+
+source "${WORKFLOWS_DIR:-$(dirname "$0")}/_helpers.sh"
+require_jq
+
+# ── CLI parsing ──────────────────────────────────────────────────────────────
+
+PLATFORMS=("apple")
+UPLOAD_SCREENSHOTS=false
+SKIP_BUILD=false
+DRY_RUN=false
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --platforms)      IFS=',' read -ra PLATFORMS <<< "$2"; shift 2 ;;
+    --screenshots)    UPLOAD_SCREENSHOTS=true; shift ;;
+    --skip-build)     SKIP_BUILD=true; shift ;;
+    --dry-run)        DRY_RUN=true; shift ;;
+    -*)               echo "Unknown option: $1"; exit 1 ;;
+    *)                echo "Unexpected argument: $1"; exit 1 ;;
+  esac
+done
+
+# ── Load env ─────────────────────────────────────────────────────────────────
+
+ENV_FILE="$APP_STORE_DIR/.env"
+if [ ! -f "$ENV_FILE" ]; then
+  echo "Error: $ENV_FILE not found. Copy .env.example to .env and fill in credentials."
+  exit 1
+fi
+source "$ENV_FILE"
+
+# ── Read package version ─────────────────────────────────────────────────────
+
+PACKAGE_VERSION=$(jq -r '.version' "$PROJECT_DIR/package.json")
+echo "Package version: $PACKAGE_VERSION"
+
+# ── Process platforms ────────────────────────────────────────────────────────
+
+for platform in "${PLATFORMS[@]}"; do
+  case "$platform" in
+    apple)
+      echo ""
+      echo "══════════════════════════════════════════════════════════════"
+      echo "  APPLE APP STORE"
+      echo "══════════════════════════════════════════════════════════════"
+      echo ""
+
+      # Validate Apple credentials
+      if [ -z "$APPLE_API_KEY_ID" ] || [ -z "$APPLE_API_ISSUER_ID" ]; then
+        echo "Error: APPLE_API_KEY_ID and APPLE_API_ISSUER_ID must be set in .env"
+        exit 1
+      fi
+      APPLE_KEY_FILE="$APP_STORE_DIR/.keys/apple.p8"
+      if [ ! -f "$APPLE_KEY_FILE" ]; then
+        echo "Error: Apple API key not found at $APPLE_KEY_FILE"
+        echo "Download from App Store Connect > Users and Access > Integrations > App Store Connect API"
+        exit 1
+      fi
+
+      # Get bundle ID from info.json
+      BUNDLE_ID=$(jq -r '.app.bundleId' "$APP_STORE_DIR/info.json")
+
+      # Step 1: Check version against App Store
+      echo "Checking App Store version..."
+      LIVE_VERSION=$(python3 "$SCRIPT_DIR/submit_apple.py" \
+        --action check-version \
+        --key-id "$APPLE_API_KEY_ID" \
+        --issuer-id "$APPLE_API_ISSUER_ID" \
+        --key-file "$APPLE_KEY_FILE" \
+        --bundle-id "$BUNDLE_ID" \
+        --package-version "$PACKAGE_VERSION")
+
+      if [ "$LIVE_VERSION" = "VERSION_EXISTS" ]; then
+        echo "Error: Version $PACKAGE_VERSION is already released on the App Store."
+        exit 1
+      elif [ "$LIVE_VERSION" = "VERSION_OLDER" ]; then
+        echo "Error: Package version $PACKAGE_VERSION is older than or equal to the live version."
+        exit 1
+      fi
+      echo "Version check passed. Proceeding with $PACKAGE_VERSION."
+
+      # Step 2: Build if needed
+      IPA_DIR="$APP_STORE_DIR/builds/release/ipa"
+      IPA_FILE=$(find "$IPA_DIR" -name "*.ipa" 2>/dev/null | head -1)
+
+      if [ -z "$IPA_FILE" ]; then
+        if [ "$SKIP_BUILD" = true ]; then
+          echo "Error: No IPA found in $IPA_DIR and --skip-build was specified."
+          exit 1
+        fi
+        echo "No IPA found. Building..."
+        if [ "$DRY_RUN" = true ]; then
+          echo "  [dry-run] Would run build.sh"
+        else
+          "$SCRIPT_DIR/build.sh" --platform ios
+          IPA_FILE=$(find "$IPA_DIR" -name "*.ipa" 2>/dev/null | head -1)
+          if [ -z "$IPA_FILE" ]; then
+            echo "Error: Build completed but no IPA found in $IPA_DIR"
+            exit 1
+          fi
+        fi
+      fi
+      echo "IPA: $IPA_FILE"
+
+      # Ensure altool can find the API key
+      ALTOOL_KEY_DIR="$HOME/.private_keys"
+      mkdir -p "$ALTOOL_KEY_DIR"
+      ALTOOL_KEY_FILE="$ALTOOL_KEY_DIR/AuthKey_${APPLE_API_KEY_ID}.p8"
+      if [ ! -f "$ALTOOL_KEY_FILE" ]; then
+        ln -s "$(cd "$(dirname "$APPLE_KEY_FILE")" && pwd)/$(basename "$APPLE_KEY_FILE")" "$ALTOOL_KEY_FILE"
+        echo "Linked API key for altool: $ALTOOL_KEY_FILE"
+      fi
+
+      # Step 3: Upload build
+      if [ "$DRY_RUN" = true ]; then
+        echo "  [dry-run] Would upload IPA via xcrun altool"
+      else
+        echo "Uploading build..."
+        xcrun altool --upload-app \
+          -f "$IPA_FILE" \
+          -t ios \
+          --apiKey "$APPLE_API_KEY_ID" \
+          --apiIssuer "$APPLE_API_ISSUER_ID"
+        echo "Build uploaded. Waiting for processing..."
+      fi
+
+      # Step 4: Create version + upload metadata
+      SCREENSHOTS_FLAG=""
+      [ "$UPLOAD_SCREENSHOTS" = true ] && SCREENSHOTS_FLAG="--screenshots"
+
+      if [ "$DRY_RUN" = true ]; then
+        echo "  [dry-run] Would create version and upload metadata"
+        [ "$UPLOAD_SCREENSHOTS" = true ] && echo "  [dry-run] Would upload screenshots"
+      else
+        python3 "$SCRIPT_DIR/submit_apple.py" \
+          --action submit \
+          --key-id "$APPLE_API_KEY_ID" \
+          --issuer-id "$APPLE_API_ISSUER_ID" \
+          --key-file "$APPLE_KEY_FILE" \
+          --bundle-id "$BUNDLE_ID" \
+          --package-version "$PACKAGE_VERSION" \
+          --app-store-dir "$APP_STORE_DIR" \
+          $SCREENSHOTS_FLAG
+      fi
+
+      echo ""
+      echo "Apple submission complete. Version $PACKAGE_VERSION is now a draft on App Store Connect."
+      ;;
+
+    google)
+      echo "Google Play submission is not yet implemented."
+      ;;
+
+    *)
+      echo "Unknown platform: $platform"
+      exit 1
+      ;;
+  esac
+done
+
+echo ""
+echo "Done."
