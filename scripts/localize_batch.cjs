@@ -215,10 +215,14 @@ function buildTargetObject(source, existing, newTranslations, lang, prefix = '')
     return source.map((item, i) => {
       const itemPath = `${prefix}[${i}]`;
       if (typeof item === 'string') {
-        return buildTargetObject(item, existing?.[i], newTranslations, lang, itemPath);
+        const built = buildTargetObject(item, existing?.[i], newTranslations, lang, itemPath);
+        // In arrays, fall back to source string to preserve array shape
+        return built !== undefined ? built : item;
       }
       if (typeof item === 'object' && item !== null) {
-        return buildTargetObject(item, existing?.[i], newTranslations, lang, itemPath);
+        const built = buildTargetObject(item, existing?.[i], newTranslations, lang, itemPath);
+        // In arrays, fall back to source object to preserve array shape
+        return built !== undefined ? built : item;
       }
       return item;
     });
