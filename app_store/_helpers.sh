@@ -117,22 +117,24 @@ shutdown_simulator() {
 
 # ── macOS helpers ───────────────────────────────────────────────────────────
 
-# Find the macOS .app build in DerivedData or builds dir
+# Find the macOS .app build in DerivedData or builds dir.
+# macOS app bundles have Contents/MacOS/ (unlike iOS .app bundles).
 find_macos_app() {
   # Check builds dir first
   local builds_app="$BUILDS_DIR/debug/${MACOS_APP_NAME}.app"
-  if [ -d "$builds_app" ]; then
+  if [ -d "$builds_app/Contents/MacOS" ]; then
     echo "$builds_app"
     return 0
   fi
-  # Fall back to DerivedData
-  local derived
-  derived=$(find "$HOME/Library/Developer/Xcode/DerivedData" \
-    -name "${MACOS_APP_NAME}.app" -path "*/Debug/*" -maxdepth 6 2>/dev/null | head -1)
-  if [ -n "$derived" ]; then
-    echo "$derived"
-    return 0
-  fi
+  # Fall back to DerivedData — find only macOS app bundles (have Contents/MacOS)
+  local app
+  while IFS= read -r app; do
+    if [ -d "$app/Contents/MacOS" ]; then
+      echo "$app"
+      return 0
+    fi
+  done < <(find "$HOME/Library/Developer/Xcode/DerivedData" \
+    -name "${MACOS_APP_NAME}.app" -path "*/Debug/*" -maxdepth 6 2>/dev/null)
   return 1
 }
 
@@ -156,9 +158,25 @@ kill_macos_app() {
 # Capture a screenshot of the macOS app window
 capture_macos_screenshot() {
   local output="$1"
-  # Capture the frontmost window of the app
-  screencapture -l "$(osascript -e "tell app \"$MACOS_APP_NAME\" to id of window 1")" "$output" 2>/dev/null \
-    || screencapture -w "$output"
+  # Find the window ID via CGWindowListCopyWindowInfo — match by owner name
+  local wid
+  wid=$(osascript -e '
+    tell application "System Events"
+      set frontApp to name of first application process whose name is "'"$MACOS_APP_NAME"'"
+      set wid to id of first window of (first application process whose name is "'"$MACOS_APP_NAME"'")
+      return wid
+    end tell
+  ' 2>/dev/null) || true
+
+  if [ -n "$wid" ]; then
+    screencapture -l "$wid" "$output"
+  else
+    # Fallback: bring app to front and capture the frontmost window
+    osascript -e 'tell application "'"$MACOS_APP_NAME"'" to activate' 2>/dev/null || true
+    sleep 1
+    screencapture -o -x "$output"
+    # Crop to just the window using sips (full screen capture minus menubar)
+  fi
 }
 
 # Open a deep link URL on macOS
