@@ -159,6 +159,19 @@ function cleanRTLText(text) {
 // --- JSON Traversal Helpers ---
 
 function flattenStrings(obj, prefix = '') {
+  // Handle top-level arrays with bracket notation to match buildTargetObject
+  if (Array.isArray(obj)) {
+    const result = [];
+    for (let i = 0; i < obj.length; i++) {
+      const p = `${prefix}[${i}]`;
+      if (typeof obj[i] === 'string') {
+        result.push({ path: p, value: obj[i] });
+      } else if (typeof obj[i] === 'object' && obj[i] !== null) {
+        result.push(...flattenStrings(obj[i], p));
+      }
+    }
+    return result;
+  }
   const result = [];
   for (const [key, value] of Object.entries(obj)) {
     const p = prefix ? `${prefix}.${key}` : key;
