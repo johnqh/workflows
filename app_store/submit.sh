@@ -98,21 +98,44 @@ for platform in "${PLATFORMS[@]}"; do
       # Step 2: Build if needed
       IPA_DIR="$APP_STORE_DIR/builds/release/ipa"
       IPA_FILE=$(find "$IPA_DIR" -name "*.ipa" 2>/dev/null | head -1)
+      IOS_APP_NAME=$(jq -r '.build.ios.appName // "App"' "$APP_STORE_DIR/info.json")
+      IOS_ARCHIVE="$APP_STORE_DIR/builds/release/${IOS_APP_NAME}.xcarchive"
+      EXPORT_OPTIONS="$APP_STORE_DIR/ExportOptions.plist"
 
       if [ -z "$IPA_FILE" ]; then
-        if [ "$SKIP_BUILD" = true ]; then
-          echo "Error: No IPA found in $IPA_DIR and --skip-build was specified."
-          exit 1
+        # Try exporting from existing archive first
+        if [ -d "$IOS_ARCHIVE" ] && [ -f "$EXPORT_OPTIONS" ]; then
+          echo "Archive exists but no IPA. Exporting..."
+          if [ "$DRY_RUN" = true ]; then
+            echo "  [dry-run] Would run xcodebuild -exportArchive"
+          else
+            rm -rf "$IPA_DIR"
+            mkdir -p "$IPA_DIR"
+            xcodebuild -exportArchive \
+              -archivePath "$IOS_ARCHIVE" \
+              -exportPath "$IPA_DIR" \
+              -exportOptionsPlist "$EXPORT_OPTIONS" \
+              -quiet
+            IPA_FILE=$(find "$IPA_DIR" -name "*.ipa" 2>/dev/null | head -1)
+          fi
         fi
-        echo "No IPA found. Building..."
-        if [ "$DRY_RUN" = true ]; then
-          echo "  [dry-run] Would run build.sh"
-        else
-          "$SCRIPT_DIR/build.sh" --platform ios
-          IPA_FILE=$(find "$IPA_DIR" -name "*.ipa" 2>/dev/null | head -1)
-          if [ -z "$IPA_FILE" ]; then
-            echo "Error: Build completed but no IPA found in $IPA_DIR"
+
+        # If still no IPA, build from scratch
+        if [ -z "$IPA_FILE" ]; then
+          if [ "$SKIP_BUILD" = true ]; then
+            echo "Error: No IPA found in $IPA_DIR and --skip-build was specified."
             exit 1
+          fi
+          echo "No IPA found. Building..."
+          if [ "$DRY_RUN" = true ]; then
+            echo "  [dry-run] Would run build.sh --force"
+          else
+            "$SCRIPT_DIR/build.sh" --platform ios --force
+            IPA_FILE=$(find "$IPA_DIR" -name "*.ipa" 2>/dev/null | head -1)
+            if [ -z "$IPA_FILE" ]; then
+              echo "Error: Build completed but no IPA found in $IPA_DIR"
+              exit 1
+            fi
           fi
         fi
       fi

@@ -1,6 +1,6 @@
 {
   "name": "@0xmail/workflows",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Shared workflow scripts for 0xmail projects",
   "scripts": {
     "localize": "node scripts/localize.cjs"
