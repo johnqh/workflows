@@ -55,7 +55,7 @@ AVENIR_NEXT = "/System/Library/Fonts/Avenir Next.ttc"
 AVENIR_HEAVY_INDEX = 8
 AVENIR_DEMIBOLD_INDEX = 2
 
-# Arial Unicode covers Arabic, CJK, Thai, Cyrillic, Ukrainian, etc.
+# Arial Unicode — used as fallback for Arabic (with reshaping)
 ARIAL_UNICODE = "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"
 
 FALLBACK_FONTS = [
@@ -63,15 +63,61 @@ FALLBACK_FONTS = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
 ]
 
-# Languages that need a Unicode font instead of Avenir Next
-NON_LATIN_LANGUAGES = {"ar", "ja", "ko", "ru", "th", "uk", "vi", "zh", "zh-hant", "zh-Hant"}
+# Per-language macOS system font mapping: lang → {weight: (path, index)}
+# Each entry maps "heavy" (title) and "demibold" (subtitle) weights.
+LANG_FONT_MAP = {
+    "ja": {
+        "heavy":   ("/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc", 0),
+        "demibold": ("/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc", 0),
+    },
+    "zh": {
+        "heavy":   ("/System/Library/Fonts/STHeiti Medium.ttc", 1),   # Heiti SC
+        "demibold": ("/System/Library/Fonts/STHeiti Medium.ttc", 1),
+    },
+    "zh-Hant": {
+        "heavy":   ("/System/Library/Fonts/STHeiti Medium.ttc", 0),   # Heiti TC
+        "demibold": ("/System/Library/Fonts/STHeiti Medium.ttc", 0),
+    },
+    "zh-hant": {
+        "heavy":   ("/System/Library/Fonts/STHeiti Medium.ttc", 0),
+        "demibold": ("/System/Library/Fonts/STHeiti Medium.ttc", 0),
+    },
+    "ko": {
+        "heavy":   ("/System/Library/Fonts/AppleSDGothicNeo.ttc", 16),  # Heavy
+        "demibold": ("/System/Library/Fonts/AppleSDGothicNeo.ttc", 4),  # SemiBold
+    },
+    "th": {
+        "heavy":   ("/System/Library/Fonts/Supplemental/Thonburi.ttc", 1),  # Bold
+        "demibold": ("/System/Library/Fonts/Supplemental/Thonburi.ttc", 0),  # Regular
+    },
+    "ru": {
+        "heavy":   ("/System/Library/Fonts/Helvetica.ttc", 1),  # Bold
+        "demibold": ("/System/Library/Fonts/Helvetica.ttc", 0),  # Regular
+    },
+    "uk": {
+        "heavy":   ("/System/Library/Fonts/Helvetica.ttc", 1),
+        "demibold": ("/System/Library/Fonts/Helvetica.ttc", 0),
+    },
+    "vi": {
+        "heavy":   ("/System/Library/Fonts/Helvetica.ttc", 1),
+        "demibold": ("/System/Library/Fonts/Helvetica.ttc", 0),
+    },
+    "ar": {
+        "heavy":   (ARIAL_UNICODE, None),
+        "demibold": (ARIAL_UNICODE, None),
+    },
+}
 
 
 def load_font(size, weight="heavy", lang=None):
-    """Load a font at the given size. Weight: 'heavy' or 'demibold'. Uses Arial Unicode for non-Latin scripts."""
-    if lang and lang in NON_LATIN_LANGUAGES:
-        if os.path.exists(ARIAL_UNICODE):
-            return ImageFont.truetype(ARIAL_UNICODE, size)
+    """Load a font at the given size. Weight: 'heavy' or 'demibold'. Uses macOS system fonts for non-Latin scripts."""
+    if lang and lang in LANG_FONT_MAP:
+        entry = LANG_FONT_MAP[lang].get(weight, LANG_FONT_MAP[lang]["heavy"])
+        path, index = entry
+        if os.path.exists(path):
+            if index is not None:
+                return ImageFont.truetype(path, size, index=index)
+            return ImageFont.truetype(path, size)
     index = AVENIR_DEMIBOLD_INDEX if weight == "demibold" else AVENIR_HEAVY_INDEX
     if os.path.exists(AVENIR_NEXT):
         return ImageFont.truetype(AVENIR_NEXT, size, index=index)

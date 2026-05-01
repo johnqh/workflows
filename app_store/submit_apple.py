@@ -148,7 +148,7 @@ def api_request(method, path, token, data=None):
     except urllib.error.HTTPError as e:
         error_body = e.read().decode("utf-8")
         print(f"API Error {e.code}: {error_body}", file=sys.stderr)
-        sys.exit(1)
+        raise
 
 
 def get_app_id(token, bundle_id):
@@ -246,7 +246,10 @@ def action_submit(args):
             continue
 
         print(f"  [{locale}] updating metadata...")
-        update_localization(token, version_id, locale, listing)
+        try:
+            update_localization(token, version_id, locale, listing)
+        except urllib.error.HTTPError:
+            print(f"  [{locale}] FAILED — skipping (see error above).")
 
     # Upload screenshots if requested
     if args.screenshots:
@@ -266,9 +269,29 @@ def create_or_get_editable_version(token, app_id, version_string):
         f"&limit=5",
         token,
     )
-    for v in resp.get("data", []):
+    editable_versions = resp.get("data", [])
+
+    # Exact match
+    for v in editable_versions:
         if v["attributes"]["versionString"] == version_string:
             return v["id"]
+
+    # If there's an editable version with a different version string, update it
+    if editable_versions:
+        v = editable_versions[0]
+        old_ver = v["attributes"]["versionString"]
+        print(f"  Updating existing editable version {old_ver} → {version_string}")
+        data = {
+            "data": {
+                "type": "appStoreVersions",
+                "id": v["id"],
+                "attributes": {
+                    "versionString": version_string,
+                },
+            }
+        }
+        api_request("PATCH", f"/appStoreVersions/{v['id']}", token, data)
+        return v["id"]
 
     # Create new version
     data = {
@@ -307,11 +330,14 @@ def update_localization(token, version_id, locale, listing):
     if listing.get("description"):
         attrs["description"] = listing["description"]
     if listing.get("keywords"):
-        attrs["keywords"] = listing["keywords"]
+        # App Store keywords must be ≤100 characters
+        kw = listing["keywords"]
+        if len(kw) > 100:
+            # Trim to last complete keyword within 100 chars
+            kw = kw[:100].rsplit(",", 1)[0]
+        attrs["keywords"] = kw
     if listing.get("promotionalText"):
         attrs["promotionalText"] = listing["promotionalText"]
-    if listing.get("whatsNew"):
-        attrs["whatsNewText"] = listing["whatsNew"]
     if listing.get("marketingUrl"):
         attrs["marketingUrl"] = listing["marketingUrl"]
     if listing.get("supportUrl"):
@@ -386,16 +412,19 @@ def upload_all_screenshots(token, version_id, app_store_dir):
 
             print(f"  [{locale}] {device_key}: {len(screenshots)} screenshots")
 
-            # Get or create screenshot set
-            set_id = get_or_create_screenshot_set(token, loc_id, display_type)
+            try:
+                # Get or create screenshot set
+                set_id = get_or_create_screenshot_set(token, loc_id, display_type)
 
-            # Delete existing screenshots in set
-            delete_existing_screenshots(token, set_id)
+                # Delete existing screenshots in set
+                delete_existing_screenshots(token, set_id)
 
-            # Upload each screenshot
-            for ss_file in screenshots:
-                ss_path = os.path.join(lang_path, ss_file)
-                upload_screenshot(token, set_id, ss_path, ss_file)
+                # Upload each screenshot
+                for ss_file in screenshots:
+                    ss_path = os.path.join(lang_path, ss_file)
+                    upload_screenshot(token, set_id, ss_path, ss_file)
+            except urllib.error.HTTPError:
+                print(f"  [{locale}] {device_key}: FAILED — skipping.")
 
 
 def get_or_create_screenshot_set(token, localization_id, display_type):
