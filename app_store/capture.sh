@@ -82,6 +82,7 @@ elif [ "$DEVICE_TYPE" = "emulator" ]; then
     exit 1
   fi
   echo "Using emulator: $DEVICE_NAME ($SERIAL)"
+  setup_adb_reverse "$SERIAL"
 elif [ "$DEVICE_TYPE" = "native" ]; then
   if ! is_macos_app_running; then
     echo "Error: macOS app is not running. Run prepare.sh first."
@@ -133,8 +134,7 @@ capture_ios() {
 capture_android() {
   local serial="$1" url="$2" output="$3"
   "$ADB" -s "$serial" shell am start -a android.intent.action.VIEW -d "'$url'" &>/dev/null
-  # Android emulators are slower to render; use 2x delay
-  sleep $(( DELAY * 2 ))
+  sleep "$DELAY"
   "$ADB" -s "$serial" exec-out screencap -p > "$output"
 }
 
@@ -169,12 +169,7 @@ switch_language() {
     elif [ "$DEVICE_TYPE" = "native" ]; then
       open_macos_deeplink "$lang_url"
     fi
-    # macOS needs extra time for RTL/LTR switches that trigger a bridge reload
-    if [ "$DEVICE_TYPE" = "native" ]; then
-      sleep $(( DELAY * 2 ))
-    else
-      sleep "$DELAY"
-    fi
+    sleep "$DELAY"
   fi
 }
 

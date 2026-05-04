@@ -26,6 +26,7 @@ IOS_WORKSPACE=$(jq -r '.build.ios.workspace // (.build.ios.appName // .app.name)
 IOS_SCHEME=$(jq -r '.build.ios.scheme // .build.ios.appName // .app.name' "$INFO_JSON")
 
 MACOS_APP_NAME=$(jq -r '.build.macos.appName // .build.ios.appName // .app.name' "$INFO_JSON")
+MACOS_PROCESS_NAME=$(jq -r '.build.macos.processName // .build.macos.appName // .build.ios.appName // .app.name' "$INFO_JSON")
 MACOS_WORKSPACE=$(jq -r '.build.macos.workspace // .build.ios.workspace // (.build.ios.appName // .app.name) + ".xcworkspace"' "$INFO_JSON")
 MACOS_SCHEME=$(jq -r '.build.macos.scheme // empty' "$INFO_JSON")
 
@@ -158,13 +159,16 @@ kill_macos_app() {
 # Capture a screenshot of the macOS app window
 capture_macos_screenshot() {
   local output="$1"
+  # Bring app to front before capturing
+  osascript -e 'tell application "'"$MACOS_PROCESS_NAME"'" to activate' 2>/dev/null || true
+  sleep 1
   # Get the CGWindowID via CoreGraphics (screencapture -l requires this, not the System Events window ID)
   local wid
   wid=$(swift -e '
     import CoreGraphics
     let wl = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as! [[String: Any]]
     for w in wl {
-      if let n = w["kCGWindowOwnerName"] as? String, n == "'"$MACOS_APP_NAME"'",
+      if let n = w["kCGWindowOwnerName"] as? String, n == "'"$MACOS_PROCESS_NAME"'",
          let l = w["kCGWindowLayer"] as? Int, l == 0 {
         print(w["kCGWindowNumber"] as! Int)
         break
@@ -175,9 +179,6 @@ capture_macos_screenshot() {
   if [ -n "$wid" ]; then
     screencapture -o -l "$wid" "$output"
   else
-    # Fallback: bring app to front and capture the frontmost window
-    osascript -e 'tell application "'"$MACOS_APP_NAME"'" to activate' 2>/dev/null || true
-    sleep 1
     screencapture -o -x "$output"
   fi
 }

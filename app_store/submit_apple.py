@@ -52,6 +52,13 @@ SCREENSHOT_DISPLAY_TYPES = {
     "macos_desktop": "APP_DESKTOP",
 }
 
+# Map device keys to App Store Connect platform
+DEVICE_PLATFORM_MAP = {
+    "iphone_6_9": "IOS",
+    "ipad_13": "IOS",
+    "macos_desktop": "MAC_OS",
+}
+
 
 # ── JWT Token Generation ───────────────────────────────────────────────────
 
@@ -224,12 +231,24 @@ def action_submit(args):
     token = generate_jwt(args.key_id, args.issuer_id, args.key_file)
     app_id = get_app_id(token, args.bundle_id)
 
-    # Create new version (or find existing editable version)
-    print(f"Creating App Store version {args.package_version}...")
-    version_id = create_or_get_editable_version(token, app_id, args.package_version)
-    print(f"Version ID: {version_id}")
+    # Determine which platforms are needed based on screenshot directories
+    needed_platforms = {"IOS"}  # Always create iOS version
+    if args.screenshots:
+        store_dir = os.path.join(args.app_store_dir, "screenshots", "store")
+        if os.path.isdir(store_dir):
+            for device_key in DEVICE_PLATFORM_MAP:
+                if os.path.isdir(os.path.join(store_dir, device_key)):
+                    needed_platforms.add(DEVICE_PLATFORM_MAP[device_key])
 
-    # Upload metadata for each language
+    # Create versions for each platform
+    version_ids = {}
+    for platform in sorted(needed_platforms):
+        print(f"Creating App Store version {args.package_version} ({platform})...")
+        version_id = create_or_get_editable_version(token, app_id, args.package_version, platform)
+        version_ids[platform] = version_id
+        print(f"  Version ID ({platform}): {version_id}")
+
+    # Upload metadata for each language to each platform version
     print("Uploading metadata...")
     info_dir = os.path.join(args.app_store_dir, "screenshots", "info")
     for lang_dir in sorted(os.listdir(info_dir)):
@@ -245,27 +264,37 @@ def action_submit(args):
         if not listing:
             continue
 
-        print(f"  [{locale}] updating metadata...")
+        # Update app-level info (subtitle) — only once per locale, not per platform
+        print(f"  [{locale}] updating app info (subtitle)...")
         try:
-            update_localization(token, version_id, locale, listing)
+            update_app_info_localization(token, app_id, locale, listing)
         except urllib.error.HTTPError:
-            print(f"  [{locale}] FAILED — skipping (see error above).")
+            print(f"  [{locale}] app info FAILED — skipping (see error above).")
+
+        for platform, version_id in version_ids.items():
+            print(f"  [{locale}] updating metadata ({platform})...")
+            try:
+                update_localization(token, version_id, locale, listing)
+            except urllib.error.HTTPError:
+                print(f"  [{locale}] {platform} FAILED — skipping (see error above).")
 
     # Upload screenshots if requested
     if args.screenshots:
         print("Uploading screenshots...")
-        upload_all_screenshots(token, version_id, args.app_store_dir)
+        upload_all_screenshots(token, version_ids, args.app_store_dir)
 
-    print(f"Version {args.package_version} is ready as draft on App Store Connect.")
+    platforms_str = ", ".join(sorted(needed_platforms))
+    print(f"Version {args.package_version} ({platforms_str}) is ready as draft on App Store Connect.")
 
 
-def create_or_get_editable_version(token, app_id, version_string):
+def create_or_get_editable_version(token, app_id, version_string, platform="IOS"):
     """Create a new version or return existing editable version."""
     # Check for existing editable version
     resp = api_request(
         "GET",
         f"/apps/{app_id}/appStoreVersions"
         f"?filter[appStoreState]=PREPARE_FOR_SUBMISSION"
+        f"&filter[platform]={platform}"
         f"&limit=5",
         token,
     )
@@ -280,7 +309,7 @@ def create_or_get_editable_version(token, app_id, version_string):
     if editable_versions:
         v = editable_versions[0]
         old_ver = v["attributes"]["versionString"]
-        print(f"  Updating existing editable version {old_ver} → {version_string}")
+        print(f"  Updating existing editable version {old_ver} → {version_string} ({platform})")
         data = {
             "data": {
                 "type": "appStoreVersions",
@@ -299,7 +328,7 @@ def create_or_get_editable_version(token, app_id, version_string):
             "type": "appStoreVersions",
             "attributes": {
                 "versionString": version_string,
-                "platform": "IOS",
+                "platform": platform,
             },
             "relationships": {
                 "app": {
@@ -310,6 +339,65 @@ def create_or_get_editable_version(token, app_id, version_string):
     }
     resp = api_request("POST", "/appStoreVersions", token, data)
     return resp["data"]["id"]
+
+
+def update_app_info_localization(token, app_id, locale, listing):
+    """Update app-level localization (subtitle, name) via appInfoLocalizations."""
+    # Get the app's appInfo
+    resp = api_request("GET", f"/apps/{app_id}/appInfos?limit=1", token)
+    app_infos = resp.get("data", [])
+    if not app_infos:
+        print(f"  Warning: No appInfo found for app, skipping subtitle.", file=sys.stderr)
+        return
+
+    app_info_id = app_infos[0]["id"]
+
+    # Get existing localizations
+    resp = api_request(
+        "GET",
+        f"/appInfos/{app_info_id}/appInfoLocalizations",
+        token,
+    )
+
+    loc_id = None
+    for loc in resp.get("data", []):
+        if loc["attributes"]["locale"] == locale:
+            loc_id = loc["id"]
+            break
+
+    attrs = {}
+    if listing.get("subtitle"):
+        attrs["subtitle"] = listing["subtitle"]
+
+    if not attrs:
+        return
+
+    if loc_id:
+        data = {
+            "data": {
+                "type": "appInfoLocalizations",
+                "id": loc_id,
+                "attributes": attrs,
+            }
+        }
+        api_request("PATCH", f"/appInfoLocalizations/{loc_id}", token, data)
+    else:
+        attrs["locale"] = locale
+        data = {
+            "data": {
+                "type": "appInfoLocalizations",
+                "attributes": attrs,
+                "relationships": {
+                    "appInfo": {
+                        "data": {
+                            "type": "appInfos",
+                            "id": app_info_id,
+                        }
+                    }
+                },
+            }
+        }
+        api_request("POST", "/appInfoLocalizations", token, data)
 
 
 def update_localization(token, version_id, locale, listing):
@@ -371,27 +459,45 @@ def update_localization(token, version_id, locale, listing):
         api_request("POST", "/appStoreVersionLocalizations", token, data)
 
 
-def upload_all_screenshots(token, version_id, app_store_dir):
-    """Upload all composed screenshots for all languages and devices."""
+def upload_all_screenshots(token, version_ids, app_store_dir):
+    """Upload all composed screenshots for all languages and devices.
+
+    version_ids: dict mapping platform (e.g. "IOS", "MAC_OS") to version ID.
+    """
     store_dir = os.path.join(app_store_dir, "screenshots", "store")
     if not os.path.isdir(store_dir):
         print("  Warning: No store screenshots directory found, skipping.")
         return
 
-    # Get localizations for this version
-    resp = api_request(
-        "GET",
-        f"/appStoreVersions/{version_id}/appStoreVersionLocalizations",
-        token,
-    )
-    loc_by_locale = {}
-    for loc in resp.get("data", []):
-        loc_by_locale[loc["attributes"]["locale"]] = loc["id"]
+    # Cache localizations per version to avoid redundant API calls
+    loc_cache = {}  # version_id -> {locale: loc_id}
+
+    def get_localizations(version_id):
+        if version_id not in loc_cache:
+            resp = api_request(
+                "GET",
+                f"/appStoreVersions/{version_id}/appStoreVersionLocalizations",
+                token,
+            )
+            loc_cache[version_id] = {
+                loc["attributes"]["locale"]: loc["id"]
+                for loc in resp.get("data", [])
+            }
+        return loc_cache[version_id]
 
     for device_key, display_type in SCREENSHOT_DISPLAY_TYPES.items():
         device_dir = os.path.join(store_dir, device_key)
         if not os.path.isdir(device_dir):
             continue
+
+        # Determine which platform version this device belongs to
+        platform = DEVICE_PLATFORM_MAP.get(device_key, "IOS")
+        version_id = version_ids.get(platform)
+        if not version_id:
+            print(f"  Warning: No {platform} version for {device_key}, skipping.")
+            continue
+
+        loc_by_locale = get_localizations(version_id)
 
         for lang_dir in sorted(os.listdir(device_dir)):
             lang_path = os.path.join(device_dir, lang_dir)
@@ -401,7 +507,7 @@ def upload_all_screenshots(token, version_id, app_store_dir):
             locale = LOCALE_MAP.get(lang_dir, lang_dir)
             loc_id = loc_by_locale.get(locale)
             if not loc_id:
-                print(f"  Warning: No localization for {locale}, skipping screenshots.")
+                print(f"  Warning: No localization for {locale} ({platform}), skipping screenshots.")
                 continue
 
             screenshots = sorted(
@@ -427,16 +533,43 @@ def upload_all_screenshots(token, version_id, app_store_dir):
                 print(f"  [{locale}] {device_key}: FAILED — skipping.")
 
 
+def _device_family(display_type):
+    """Return device family prefix (e.g. 'APP_IPHONE' from 'APP_IPHONE_67')."""
+    for prefix in ("APP_IPHONE", "APP_IPAD", "APP_DESKTOP", "APP_APPLE_TV", "APP_WATCH"):
+        if display_type.startswith(prefix):
+            return prefix
+    return display_type
+
+
 def get_or_create_screenshot_set(token, localization_id, display_type):
-    """Get existing screenshot set or create one."""
+    """Get existing screenshot set or create one.
+
+    If a set with a different display type in the same device family exists
+    (e.g. APP_IPHONE_65 when we want APP_IPHONE_67), delete it first so we
+    can create the correct one.
+    """
     resp = api_request(
         "GET",
         f"/appStoreVersionLocalizations/{localization_id}/appScreenshotSets",
         token,
     )
+
+    target_family = _device_family(display_type)
+    family_match = None
+
     for ss_set in resp.get("data", []):
-        if ss_set["attributes"]["screenshotDisplayType"] == display_type:
+        existing_type = ss_set["attributes"]["screenshotDisplayType"]
+        if existing_type == display_type:
             return ss_set["id"]
+        if _device_family(existing_type) == target_family:
+            family_match = ss_set
+
+    # If a set exists for the same device family but wrong display type, replace it
+    if family_match:
+        old_type = family_match["attributes"]["screenshotDisplayType"]
+        print(f"    Replacing display type {old_type} → {display_type}")
+        delete_existing_screenshots(token, family_match["id"])
+        api_request("DELETE", f"/appScreenshotSets/{family_match['id']}", token)
 
     # Create new set
     data = {
