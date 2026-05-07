@@ -289,16 +289,19 @@ def action_submit(args):
 
 def create_or_get_editable_version(token, app_id, version_string, platform="IOS"):
     """Create a new version or return existing editable version."""
-    # Check for existing editable version
+    # Check for existing editable version — fetch recent versions and filter locally
     resp = api_request(
         "GET",
         f"/apps/{app_id}/appStoreVersions"
-        f"?filter[appStoreState]=PREPARE_FOR_SUBMISSION"
-        f"&filter[platform]={platform}"
-        f"&limit=5",
+        f"?filter[platform]={platform}"
+        f"&limit=10",
         token,
     )
-    editable_versions = resp.get("data", [])
+    live_states = {"READY_FOR_SALE", "REPLACED_WITH_NEW_VERSION", "REMOVED_FROM_SALE"}
+    editable_versions = [
+        v for v in resp.get("data", [])
+        if v["attributes"]["appStoreState"] not in live_states
+    ]
 
     # Exact match
     for v in editable_versions:
