@@ -194,7 +194,46 @@ for platform in "${PLATFORMS[@]}"; do
       ;;
 
     google)
-      echo "Google Play submission is not yet implemented."
+      echo ""
+      echo "══════════════════════════════════════════════════════════════"
+      echo "  GOOGLE PLAY STORE"
+      echo "══════════════════════════════════════════════════════════════"
+      echo ""
+
+      # Validate Google Play credentials
+      if [ -z "$GOOGLE_PLAY_SERVICE_ACCOUNT_KEY" ]; then
+        echo "Error: GOOGLE_PLAY_SERVICE_ACCOUNT_KEY must be set in .env"
+        exit 1
+      fi
+      GOOGLE_KEY_FILE="$APP_STORE_DIR/$GOOGLE_PLAY_SERVICE_ACCOUNT_KEY"
+      if [ ! -f "$GOOGLE_KEY_FILE" ]; then
+        echo "Error: Google Play service account key not found at $GOOGLE_KEY_FILE"
+        echo "Download from Google Cloud Console > IAM > Service Accounts > Keys"
+        exit 1
+      fi
+
+      PACKAGE_NAME=$(jq -r '.app.packageName' "$APP_STORE_DIR/info.json")
+
+      GOOGLE_FLAGS=""
+      [ "$UPLOAD_SCREENSHOTS" = true ] && GOOGLE_FLAGS="$GOOGLE_FLAGS --screenshots"
+      [ "$METADATA_ONLY" = true ] && GOOGLE_FLAGS="$GOOGLE_FLAGS --metadata-only"
+
+      if [ "$DRY_RUN" = true ]; then
+        echo "  [dry-run] Would submit to Google Play"
+        [ "$METADATA_ONLY" = true ] && echo "  [dry-run] Metadata only (no AAB upload)"
+        [ "$UPLOAD_SCREENSHOTS" = true ] && echo "  [dry-run] Would upload screenshots"
+      else
+        python3 "$SCRIPT_DIR/submit_google.py" \
+          --action submit \
+          --service-account-key "$GOOGLE_KEY_FILE" \
+          --package-name "$PACKAGE_NAME" \
+          --package-version "$PACKAGE_VERSION" \
+          --app-store-dir "$APP_STORE_DIR" \
+          $GOOGLE_FLAGS
+      fi
+
+      echo ""
+      echo "Google Play submission complete."
       ;;
 
     *)
