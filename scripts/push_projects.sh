@@ -831,6 +831,50 @@ process_subpackages() {
     return 0
 }
 
+# Sync version to React Native native platform files (iOS, Android, macOS, Windows)
+sync_rn_native_versions() {
+    local project_dir="$1"
+    local version="$2"
+
+    # Detect if this is a React Native project
+    if [ ! -d "$project_dir/ios" ] && [ ! -d "$project_dir/android" ]; then
+        return 0
+    fi
+
+    log_info "Syncing version $version to native platforms..."
+
+    # iOS: update MARKETING_VERSION in pbxproj
+    local ios_pbxproj
+    ios_pbxproj=$(find "$project_dir/ios" -name "project.pbxproj" -maxdepth 3 2>/dev/null | head -1)
+    if [ -n "$ios_pbxproj" ] && [ -f "$ios_pbxproj" ]; then
+        sed -i '' "s/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = $version;/g" "$ios_pbxproj"
+        log_info "  Updated iOS MARKETING_VERSION"
+    fi
+
+    # Android: update versionName in build.gradle
+    local android_gradle="$project_dir/android/app/build.gradle"
+    if [ -f "$android_gradle" ]; then
+        sed -i '' "s/versionName \"[^\"]*\"/versionName \"$version\"/" "$android_gradle"
+        log_info "  Updated Android versionName"
+    fi
+
+    # macOS: update CFBundleShortVersionString in Info.plist
+    local macos_plist
+    macos_plist=$(find "$project_dir/macos" -name "Info.plist" -path "*-macOS/*" -maxdepth 3 2>/dev/null | head -1)
+    if [ -n "$macos_plist" ] && [ -f "$macos_plist" ]; then
+        /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$macos_plist" 2>/dev/null && \
+            log_info "  Updated macOS CFBundleShortVersionString"
+    fi
+
+    # Windows: update version in Package.appxmanifest (if exists)
+    local windows_manifest
+    windows_manifest=$(find "$project_dir/windows" -name "Package.appxmanifest" -maxdepth 3 2>/dev/null | head -1)
+    if [ -n "$windows_manifest" ] && [ -f "$windows_manifest" ]; then
+        sed -i '' "s/Version=\"[0-9]*\.[0-9]*\.[0-9]*\.[0-9]*\"/Version=\"$version.0\"/" "$windows_manifest"
+        log_info "  Updated Windows Package.appxmanifest"
+    fi
+}
+
 # Bump version in package.json
 bump_version() {
     local project_dir="$1"
@@ -867,6 +911,7 @@ bump_version() {
     if pm_version_bump >/dev/null 2>&1; then
         local new_version=$(node -e "console.log(require('$pkg_json').version)")
         log_success "Version bumped to $new_version"
+        sync_rn_native_versions "$project_dir" "$new_version"
         return 0
     else
         log_error "Failed to bump version"
