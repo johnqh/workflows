@@ -845,7 +845,7 @@ sync_rn_native_versions() {
 
     # iOS: update MARKETING_VERSION in pbxproj
     local ios_pbxproj
-    ios_pbxproj=$(find "$project_dir/ios" -name "project.pbxproj" -maxdepth 3 2>/dev/null | head -1)
+    ios_pbxproj=$(find "$project_dir/ios" -name "project.pbxproj" -not -path "*/Pods/*" -maxdepth 3 2>/dev/null | head -1)
     if [ -n "$ios_pbxproj" ] && [ -f "$ios_pbxproj" ]; then
         sed -i '' "s/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = $version;/g" "$ios_pbxproj"
         log_info "  Updated iOS MARKETING_VERSION"
@@ -856,6 +856,14 @@ sync_rn_native_versions() {
     if [ -f "$android_gradle" ]; then
         sed -i '' "s/versionName \"[^\"]*\"/versionName \"$version\"/" "$android_gradle"
         log_info "  Updated Android versionName"
+    fi
+
+    # macOS: update MARKETING_VERSION in pbxproj
+    local macos_pbxproj
+    macos_pbxproj=$(find "$project_dir/macos" -name "project.pbxproj" -not -path "*/Pods/*" -maxdepth 3 2>/dev/null | head -1)
+    if [ -n "$macos_pbxproj" ] && [ -f "$macos_pbxproj" ]; then
+        sed -i '' "s/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = $version;/g" "$macos_pbxproj"
+        log_info "  Updated macOS MARKETING_VERSION"
     fi
 
     # macOS: update CFBundleShortVersionString in Info.plist
