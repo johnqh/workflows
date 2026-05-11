@@ -409,6 +409,35 @@ update_sudobility_deps() {
 
     local has_updates=false
 
+    # Clean up overrides/resolutions containing file: references
+    # These are sometimes added during local development and should not be committed
+    local cleaned_file_refs
+    cleaned_file_refs=$(node -e "
+        const fs = require('fs');
+        const pkg = require('$pkg_json');
+        let changed = false;
+        for (const field of ['overrides', 'resolutions']) {
+            if (!pkg[field]) continue;
+            for (const [k, v] of Object.entries(pkg[field])) {
+                if (typeof v === 'string' && (v.startsWith('file:') || v.startsWith('link:'))) {
+                    delete pkg[field][k];
+                    changed = true;
+                }
+            }
+            if (Object.keys(pkg[field]).length === 0) {
+                delete pkg[field];
+            }
+        }
+        if (changed) {
+            fs.writeFileSync('$pkg_json', JSON.stringify(pkg, null, 2) + '\n');
+            console.log('cleaned');
+        }
+    " 2>/dev/null)
+    if [ "$cleaned_file_refs" = "cleaned" ]; then
+        log_warning "Removed file:/link: references from overrides/resolutions in package.json"
+        has_updates=true
+    fi
+
     # Read all @sudobility package names and current versions in one node call
     local deps_info
     deps_info=$(node -e "
