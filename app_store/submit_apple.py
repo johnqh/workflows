@@ -224,6 +224,129 @@ def action_check_version(args):
         print(f"OK:{live_version}")
 
 
+# ── Subscription localizations ───────────────────────────────────────────
+
+def update_subscription_localizations(token, app_id, app_store_dir):
+    """Upload per-store subscription name/description localizations.
+
+    Reads product definitions from info.json and localized text from each
+    language's info.json (the "subscriptions" object with "apple"/"google" keys).
+    """
+    info_json = os.path.join(app_store_dir, "info.json")
+    with open(info_json) as f:
+        root_info = json.load(f)
+
+    products = root_info.get("subscriptions", {}).get("products", [])
+    if not products:
+        print("  No subscription products defined in info.json.")
+        return
+
+    # Build map: appleProductId -> subscription resource ID
+    print("  Fetching subscription groups...")
+    resp = api_request("GET", f"/apps/{app_id}/subscriptionGroups?limit=50", token)
+    groups = resp.get("data", [])
+
+    product_map = {}  # appleProductId -> subscription resource ID
+    for group in groups:
+        group_id = group["id"]
+        subs_resp = api_request(
+            "GET", f"/subscriptionGroups/{group_id}/subscriptions?limit=50", token
+        )
+        for sub in subs_resp.get("data", []):
+            pid = sub["attributes"]["productID"]
+            product_map[pid] = sub["id"]
+
+    if not product_map:
+        print("  Warning: No subscriptions found on App Store Connect.")
+        return
+
+    # Process each language
+    info_dir = os.path.join(app_store_dir, "screenshots", "info")
+    for lang_dir in sorted(os.listdir(info_dir)):
+        lang_info_path = os.path.join(info_dir, lang_dir, "info.json")
+        if not os.path.exists(lang_info_path):
+            continue
+
+        with open(lang_info_path) as f:
+            lang_info = json.load(f)
+
+        subs_data = lang_info.get("subscriptions", {})
+        if not subs_data:
+            continue
+
+        locale = LOCALE_MAP.get(lang_dir, lang_dir)
+
+        for product in products:
+            key = product["key"]
+            apple_pid = product["appleProductId"]
+            sub_id = product_map.get(apple_pid)
+            if not sub_id:
+                print(f"  Warning: Subscription '{apple_pid}' not found on App Store Connect, skipping.")
+                continue
+
+            sub_text = subs_data.get(key, {}).get("apple", {})
+            if not sub_text:
+                continue
+
+            print(f"  [{locale}] {key}: updating subscription localization...")
+            try:
+                _upsert_subscription_localization(token, sub_id, locale, sub_text)
+            except urllib.error.HTTPError:
+                print(f"  [{locale}] {key}: FAILED — skipping (see error above).")
+
+
+def _upsert_subscription_localization(token, subscription_id, locale, text):
+    """Create or update a subscription localization."""
+    # Find existing localization for this locale
+    resp = api_request(
+        "GET",
+        f"/subscriptions/{subscription_id}/subscriptionLocalizations",
+        token,
+    )
+
+    loc_id = None
+    for loc in resp.get("data", []):
+        if loc["attributes"]["locale"] == locale:
+            loc_id = loc["id"]
+            break
+
+    attrs = {}
+    if text.get("name"):
+        attrs["name"] = text["name"]
+    if text.get("description"):
+        attrs["description"] = text["description"]
+
+    if not attrs:
+        return
+
+    if loc_id:
+        data = {
+            "data": {
+                "type": "subscriptionLocalizations",
+                "id": loc_id,
+                "attributes": attrs,
+            }
+        }
+        api_request("PATCH", f"/subscriptionLocalizations/{loc_id}", token, data)
+    else:
+        attrs["locale"] = locale
+        data = {
+            "data": {
+                "type": "subscriptionLocalizations",
+                "attributes": attrs,
+                "relationships": {
+                    "subscription": {
+                        "data": {
+                            "type": "subscriptions",
+                            "id": subscription_id,
+                        }
+                    }
+                },
+            }
+        }
+        api_request("POST", "/subscriptionLocalizations", token, data)
+
+
 # ── Submit action ─────────────────────────────────────────────────────────
 
 def action_submit(args):
@@ -260,7 +383,7 @@ def action_submit(args):
         with open(info_path) as f:
             info = json.load(f)
 
-        listing = info.get("listing", {})
+        listing = info.get("appleAppStore", {})
         if not listing:
             continue
 
@@ -282,6 +405,11 @@ def action_submit(args):
     if args.screenshots:
         print("Uploading screenshots...")
         upload_all_screenshots(token, version_ids, args.app_store_dir)
+
+    # Upload subscription localizations if requested
+    if args.subscriptions:
+        print("Uploading subscription localizations...")
+        update_subscription_localizations(token, app_id, args.app_store_dir)
 
     platforms_str = ", ".join(sorted(needed_platforms))
     print(f"Version {args.package_version} ({platforms_str}) is ready as draft on App Store Connect.")
@@ -666,6 +794,7 @@ def main():
     parser.add_argument("--package-version", required=True)
     parser.add_argument("--app-store-dir", default=None)
     parser.add_argument("--screenshots", action="store_true")
+    parser.add_argument("--subscriptions", action="store_true")
     args = parser.parse_args()
 
     if args.action == "check-version":

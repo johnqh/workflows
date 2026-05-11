@@ -279,6 +279,86 @@ def upload_all_screenshots(token, package_name, edit_id, app_store_dir):
                 print(f"  [{locale}] {device_key}: FAILED — skipping.")
 
 
+# ── Subscription listings ────────────────────────────────────────────
+
+def update_subscription_listings(token, package_name, app_store_dir):
+    """Upload per-store subscription name/description localizations.
+
+    Uses the inappproducts API to update subscription listings.
+    Reads product definitions from info.json and localized text from each
+    language's info.json (the "subscriptions" object with "apple"/"google" keys).
+
+    This runs outside the edit workflow — in-app product updates are direct.
+    """
+    info_json = os.path.join(app_store_dir, "info.json")
+    with open(info_json) as f:
+        root_info = json.load(f)
+
+    products = root_info.get("subscriptions", {}).get("products", [])
+    if not products:
+        print("  No subscription products defined in info.json.")
+        return
+
+    # Collect all localized listings per product
+    # product_listings[googleSku][locale] = {title, description}
+    product_listings = {}
+    info_dir = os.path.join(app_store_dir, "screenshots", "info")
+    for lang_dir in sorted(os.listdir(info_dir)):
+        lang_info_path = os.path.join(info_dir, lang_dir, "info.json")
+        if not os.path.exists(lang_info_path):
+            continue
+
+        with open(lang_info_path) as f:
+            lang_info = json.load(f)
+
+        subs_data = lang_info.get("subscriptions", {})
+        if not subs_data:
+            continue
+
+        locale = LOCALE_MAP.get(lang_dir, lang_dir)
+
+        for product in products:
+            key = product["key"]
+            sku = product["googleSku"]
+            sub_text = subs_data.get(key, {}).get("google", {})
+            if not sub_text:
+                continue
+
+            if sku not in product_listings:
+                product_listings[sku] = {}
+
+            listing = {}
+            if sub_text.get("name"):
+                listing["title"] = sub_text["name"]
+            if sub_text.get("description"):
+                listing["description"] = sub_text["description"]
+            if listing:
+                product_listings[sku][locale] = listing
+
+    # Update each product's listings
+    for sku, new_listings in product_listings.items():
+        print(f"  {sku}: updating {len(new_listings)} locale(s)...")
+        try:
+            # GET existing product to merge listings
+            existing = api_request(
+                "GET",
+                f"{API_BASE}/{package_name}/inappproducts/{sku}",
+                token,
+            )
+            current_listings = existing.get("listings", {})
+            current_listings.update(new_listings)
+
+            api_request(
+                "PATCH",
+                f"{API_BASE}/{package_name}/inappproducts/{sku}",
+                token,
+                {"listings": current_listings},
+            )
+            print(f"  {sku}: done.")
+        except urllib.error.HTTPError:
+            print(f"  {sku}: FAILED — skipping (see error above).")
+
+
 # ── Actions ───────────────────────────────────────────────────────────────
 
 def action_check_version(args):
@@ -391,6 +471,11 @@ def action_submit(args):
         delete_edit(token, pkg, edit_id)
         raise
 
+    # Update subscription listings (outside the edit workflow)
+    if args.subscriptions:
+        print("Updating subscription listings...")
+        update_subscription_listings(token, pkg, args.app_store_dir)
+
 
 # ── CLI ───────────────────────────────────────────────────────────────────
 
@@ -407,6 +492,7 @@ def main():
     parser.add_argument("--app-store-dir", default=None)
     parser.add_argument("--track", default="production")
     parser.add_argument("--screenshots", action="store_true")
+    parser.add_argument("--subscriptions", action="store_true")
     parser.add_argument("--metadata-only", action="store_true")
     args = parser.parse_args()
 

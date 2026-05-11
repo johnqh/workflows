@@ -10,6 +10,7 @@
 # Options:
 #   --platforms <list>   Comma-separated platforms: apple (default: apple).
 #   --screenshots        Upload composed store screenshots.
+#   --subscriptions      Upload subscription name/description localizations.
 #   --metadata-only      Skip build/upload binary, only update metadata (and screenshots if --screenshots).
 #   --skip-build         Skip build step (assume IPA exists).
 #   --dry-run            Print actions without executing.
@@ -23,6 +24,7 @@ require_jq
 
 PLATFORMS=("apple")
 UPLOAD_SCREENSHOTS=false
+UPLOAD_SUBSCRIPTIONS=false
 METADATA_ONLY=false
 SKIP_BUILD=false
 DRY_RUN=false
@@ -31,6 +33,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --platforms)      IFS=',' read -ra PLATFORMS <<< "$2"; shift 2 ;;
     --screenshots)    UPLOAD_SCREENSHOTS=true; shift ;;
+    --subscriptions)  UPLOAD_SUBSCRIPTIONS=true; shift ;;
     --metadata-only)  METADATA_ONLY=true; shift ;;
     --skip-build)     SKIP_BUILD=true; shift ;;
     --dry-run)        DRY_RUN=true; shift ;;
@@ -173,10 +176,13 @@ for platform in "${PLATFORMS[@]}"; do
       # Step 4: Create version + upload metadata
       SCREENSHOTS_FLAG=""
       [ "$UPLOAD_SCREENSHOTS" = true ] && SCREENSHOTS_FLAG="--screenshots"
+      SUBSCRIPTIONS_FLAG=""
+      [ "$UPLOAD_SUBSCRIPTIONS" = true ] && SUBSCRIPTIONS_FLAG="--subscriptions"
 
       if [ "$DRY_RUN" = true ]; then
         echo "  [dry-run] Would create version and upload metadata"
         [ "$UPLOAD_SCREENSHOTS" = true ] && echo "  [dry-run] Would upload screenshots"
+        [ "$UPLOAD_SUBSCRIPTIONS" = true ] && echo "  [dry-run] Would upload subscription localizations"
       else
         python3 "$SCRIPT_DIR/submit_apple.py" \
           --action submit \
@@ -186,7 +192,8 @@ for platform in "${PLATFORMS[@]}"; do
           --bundle-id "$BUNDLE_ID" \
           --package-version "$PACKAGE_VERSION" \
           --app-store-dir "$APP_STORE_DIR" \
-          $SCREENSHOTS_FLAG
+          $SCREENSHOTS_FLAG \
+          $SUBSCRIPTIONS_FLAG
       fi
 
       echo ""
@@ -216,12 +223,14 @@ for platform in "${PLATFORMS[@]}"; do
 
       GOOGLE_FLAGS=""
       [ "$UPLOAD_SCREENSHOTS" = true ] && GOOGLE_FLAGS="$GOOGLE_FLAGS --screenshots"
+      [ "$UPLOAD_SUBSCRIPTIONS" = true ] && GOOGLE_FLAGS="$GOOGLE_FLAGS --subscriptions"
       [ "$METADATA_ONLY" = true ] && GOOGLE_FLAGS="$GOOGLE_FLAGS --metadata-only"
 
       if [ "$DRY_RUN" = true ]; then
         echo "  [dry-run] Would submit to Google Play"
         [ "$METADATA_ONLY" = true ] && echo "  [dry-run] Metadata only (no AAB upload)"
         [ "$UPLOAD_SCREENSHOTS" = true ] && echo "  [dry-run] Would upload screenshots"
+        [ "$UPLOAD_SUBSCRIPTIONS" = true ] && echo "  [dry-run] Would upload subscription listings"
       else
         python3 "$SCRIPT_DIR/submit_google.py" \
           --action submit \
