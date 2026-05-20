@@ -150,9 +150,11 @@ Multi-project orchestration for the 0xmail ecosystem. Can be sourced or run dire
 
 **Auto-detects package managers** (bun, pnpm, yarn, npm) via lockfiles. Provides `pm_install`, `pm_run`, `pm_exec`, `pm_version_bump` wrappers.
 
-**Per-project pipeline:** detect PM, update `@sudobility/*` deps to latest, optionally process sub-packages, check for changes, validate (typecheck/lint/test/build), bump patch version, update lockfile, generate descriptive commit message, commit and push.
+**Per-project pipeline:** detect PM, update `@sudobility/*` deps to latest, optionally process sub-packages, check for changes, validate (typecheck/lint/test/build), bump patch version, update lockfile, generate commit message (AI or heuristic), commit and push.
 
-**Flags**: `--force`/`-f`, `--subpackages`/`-s`, `--continue-on-error`/`-c`, `--projects-file`, `--starting-project`, `--help`/`-h`. Project spec format: `path:delay_seconds`.
+**AI commit messages**: Uses `claude -p --model haiku` to generate meaningful conventional commit messages from the staged diff. Falls back to heuristic analysis if `claude` CLI is not available. Disable with `--no-ai`.
+
+**Flags**: `--force`/`-f`, `--subpackages`/`-s`, `--continue-on-error`/`-c`, `--no-ai`, `--projects-file`, `--starting-project`, `--help`/`-h`. Project spec format: `path:delay_seconds`.
 
 ### SVG Utilities (`scripts/svg/`)
 

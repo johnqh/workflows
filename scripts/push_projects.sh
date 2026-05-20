@@ -47,6 +47,7 @@ SUBPACKAGES_MODE=false
 CONTINUE_ON_ERROR=false
 PROJECTS_FILE=""
 STARTING_PROJECT=""
+AI_COMMIT=true
 
 # Failure tracking (used with --continue-on-error)
 declare -a FAILED_PROJECTS=()
@@ -294,6 +295,7 @@ OPTIONS:
     --starting-project       Skip projects until reaching the specified project name
     --continue-on-error, -c  Log failures and continue to the next project.
                              Collects all failures and prints a summary at the end.
+    --no-ai                  Disable AI-generated commit messages (use heuristic only)
     --help, -h               Show this help message
 
 EXAMPLES:
@@ -1071,6 +1073,56 @@ Generated with push_projects.sh"
 $commit_body"
 }
 
+# Generate commit message using AI (claude CLI)
+generate_ai_commit_message() {
+    local version="$1"
+    local project_name="$2"
+
+    # Check if claude CLI is available
+    if ! command -v claude &>/dev/null; then
+        return 1
+    fi
+
+    local diff_stat diff_content
+    diff_stat=$(git diff --cached --stat 2>/dev/null)
+    # Truncate diff to ~300 lines to keep the prompt small and fast
+    diff_content=$(git diff --cached 2>/dev/null | head -300)
+
+    if [ -z "$diff_stat" ]; then
+        return 1
+    fi
+
+    local prompt="Generate a git commit message for project \"$project_name\" version $version.
+
+Rules:
+- First line: conventional commit format (feat/fix/refactor/chore/docs/test/ci: description) under 72 chars
+- Include \"and bump version to $version\" at the end of the first line
+- Add a blank line then a brief body (2-5 bullet points) summarizing the changes
+- End with a blank line and: Generated with push_projects.sh
+- Be specific about WHAT changed, not generic
+- Do NOT wrap in markdown code blocks
+
+Changed files:
+$diff_stat
+
+Diff:
+$diff_content"
+
+    local ai_msg
+    ai_msg=$(echo "$prompt" | claude -p --model haiku 2>/dev/null)
+    local exit_code=$?
+
+    if [ $exit_code -ne 0 ] || [ -z "$ai_msg" ]; then
+        return 1
+    fi
+
+    # Strip markdown code fences if present
+    ai_msg=$(echo "$ai_msg" | sed '/^```/d')
+
+    echo "$ai_msg"
+    return 0
+}
+
 # Commit and push changes
 commit_and_push() {
     local project_dir="$1"
@@ -1088,7 +1140,15 @@ commit_and_push() {
     local version=$(node -e "console.log(require('./package.json').version)" 2>/dev/null || echo "unknown")
 
     local commit_msg
-    commit_msg=$(analyze_changes "$version" "$FORCE_MODE")
+
+    # Try AI-generated commit message first, fall back to heuristic
+    if [ "$AI_COMMIT" = true ]; then
+        commit_msg=$(generate_ai_commit_message "$version" "$project_name" 2>/dev/null) || true
+    fi
+
+    if [ -z "$commit_msg" ]; then
+        commit_msg=$(analyze_changes "$version" "$FORCE_MODE")
+    fi
 
     if git commit -m "$commit_msg" >/dev/null 2>&1; then
         log_success "Changes committed"
@@ -1376,6 +1436,10 @@ parse_args() {
             --starting-project)
                 STARTING_PROJECT="$2"
                 shift 2
+                ;;
+            --no-ai)
+                AI_COMMIT=false
+                shift
                 ;;
             *)
                 log_error "Unknown option: $1"
