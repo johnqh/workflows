@@ -1162,6 +1162,17 @@ commit_and_push() {
     push_output=$(git push 2>&1)
     local push_exit_code=$?
 
+    # If push fails due to no upstream, retry with --set-upstream
+    if [ "$push_exit_code" -ne 0 ]; then
+        local current_branch
+        current_branch=$(git branch --show-current 2>/dev/null)
+        if echo "$push_output" | grep -q "no upstream branch\|push.autoSetupRemote\|has no upstream"; then
+            log_info "No upstream branch, pushing with --set-upstream origin $current_branch"
+            push_output=$(git push --set-upstream origin "$current_branch" 2>&1)
+            push_exit_code=$?
+        fi
+    fi
+
     # Show output (filter out "Everything up-to-date" noise)
     echo "$push_output" | grep -v "Everything up-to-date" || true
 
