@@ -18,8 +18,11 @@ workflows/
 ├── .github/workflows/
 │   └── unified-cicd.yml              # The reusable CI/CD workflow (~824 lines)
 ├── scripts/
+│   ├── generate-seo-assets.mjs        # Multilingual SEO generator (sitemap, robots, per-route HTML)
+│   ├── process-static-files.ts       # Generic {{...}} template processor for static files
 │   ├── localize.cjs                  # LLM-first i18n translation (LM Studio + DeepL fallback)
 │   ├── localize_batch.cjs            # Batch translation via Whisperly API
+│   ├── cf-pages-sync-env.sh          # Sync .env to Cloudflare Pages secrets
 │   ├── push_projects.sh              # Multi-project dependency update, validate, bump, push
 │   ├── lint-workflows.sh             # actionlint runner for workflow YAML validation
 │   └── svg/
@@ -92,6 +95,32 @@ A single reusable `workflow_call` that every ecosystem project references. Conta
 - `develop`: Tests only, optional email notifications on failure
 - Pull requests: Tests only
 
+### SEO Asset Generator (`scripts/generate-seo-assets.mjs`)
+
+Generates per-route, per-language `index.html` files with localized meta tags (title, description, keywords, Open Graph, Twitter), canonical URLs, hreflang alternate links, `sitemap.xml`, and `robots.txt` for multilingual static sites.
+
+**Config-driven**: Reads project-specific `seo.config.mjs` from the working directory (or `--config <path>`). Config defines supported languages, hreflang map, domain, routes with locale-based meta functions, and optional strip patterns.
+
+**Features:**
+- Locale fallback: merges localized JSON with English fallback via deep merge
+- `{{appName}}`, `{{date}}` interpolation in locale strings (extensible via `interpolationVars`)
+- Non-production host detection: auto-sets `noindex` and skips hreflang on staging/preview domains
+- `canonicalPath` support: routes can point canonical to a different path (e.g., `/docs` → `/docs/getting-started`)
+- `stripPatterns`: project-specific regex patterns to strip legacy HTML blocks
+
+**Usage:**
+```bash
+node generate-seo-assets.mjs public                       # sitemap + robots only (no index.html in public/)
+node generate-seo-assets.mjs dist                         # full generation after Vite build
+node generate-seo-assets.mjs --config ./seo.config.mjs dist
+```
+
+**Typical build integration:**
+```json
+"seo:fetch": "curl -fsSL https://raw.githubusercontent.com/johnqh/workflows/main/scripts/generate-seo-assets.mjs -o /tmp/generate-seo-assets.mjs",
+"build": "bun run seo:fetch && node /tmp/generate-seo-assets.mjs public && tsc -b && vite build && node /tmp/generate-seo-assets.mjs dist"
+```
+
 ### Localization Script (`scripts/localize.cjs`)
 
 Translates i18n JSON locale files from English (`en/`) to 15 target languages (ar, de, es, fr, it, ja, ko, pt, ru, sv, th, uk, vi, zh, zh-hant).
@@ -142,6 +171,11 @@ Runs CI steps locally for all ecosystem projects. Projects: `design_system` (pub
 # Validate workflow YAML files with actionlint
 make lint-workflows
 ./scripts/lint-workflows.sh
+
+# SEO asset generation (requires seo.config.mjs in project root)
+node scripts/generate-seo-assets.mjs public          # sitemap + robots to public/
+node scripts/generate-seo-assets.mjs dist             # full per-route HTML to dist/
+node scripts/generate-seo-assets.mjs --config path/to/seo.config.mjs dist
 
 # Localization (LM Studio + DeepL fallback)
 node scripts/localize.cjs ./public/locales
