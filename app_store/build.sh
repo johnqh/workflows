@@ -62,8 +62,9 @@ echo ""
 
 # ── Sync app version from package.json ──────────────────────────────────────
 
-APP_VERSION=$(jq -r '.version' "$PROJECT_DIR/package.json")
-echo "Syncing app version: $APP_VERSION"
+FULL_VERSION=$(jq -r '.version' "$PROJECT_DIR/package.json")
+APP_VERSION=$(echo "$FULL_VERSION" | cut -d. -f1-2)
+echo "Syncing app version: $APP_VERSION (from $FULL_VERSION)"
 
 if [ "$DRY_RUN" = true ]; then
   echo "  [dry-run] Would update platform version strings to $APP_VERSION"
@@ -82,11 +83,11 @@ else
     echo "  Updated Android versionName"
   fi
 
-  # macOS: update CFBundleShortVersionString in Info.plist
-  MACOS_PLIST="$PROJECT_DIR/macos/$IOS_APP_NAME-macOS/Info.plist"
-  if [ -f "$MACOS_PLIST" ]; then
-    /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" "$MACOS_PLIST"
-    echo "  Updated macOS CFBundleShortVersionString"
+  # macOS: update MARKETING_VERSION in pbxproj
+  MACOS_PBXPROJ="$PROJECT_DIR/macos/$IOS_APP_NAME.xcodeproj/project.pbxproj"
+  if [ -f "$MACOS_PBXPROJ" ]; then
+    sed -i '' "s/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = $APP_VERSION;/g" "$MACOS_PBXPROJ"
+    echo "  Updated macOS MARKETING_VERSION"
   fi
 fi
 echo ""

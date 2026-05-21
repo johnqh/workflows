@@ -53,8 +53,9 @@ source "$ENV_FILE"
 
 # ── Read package version ─────────────────────────────────────────────────────
 
-PACKAGE_VERSION=$(jq -r '.version' "$PROJECT_DIR/package.json")
-echo "Package version: $PACKAGE_VERSION"
+FULL_VERSION=$(jq -r '.version' "$PROJECT_DIR/package.json")
+PACKAGE_VERSION=$(echo "$FULL_VERSION" | cut -d. -f1-2)
+echo "Package version: $PACKAGE_VERSION (from $FULL_VERSION)"
 
 # ── Process platforms ────────────────────────────────────────────────────────
 

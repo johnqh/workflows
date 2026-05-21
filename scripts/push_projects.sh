@@ -232,13 +232,14 @@ pm_version_bump() {
     esac
 }
 
-# Ensure NPM_TOKEN is set for private package access
-if [ -z "${NPM_TOKEN:-}" ]; then
-    if [ -f "$HOME/.npmrc" ]; then
-        EXTRACTED_TOKEN=$(grep '_authToken=' "$HOME/.npmrc" 2>/dev/null | sed 's/.*_authToken=//' | head -1)
-        if [ -n "$EXTRACTED_TOKEN" ]; then
-            export NPM_TOKEN="$EXTRACTED_TOKEN"
-        fi
+# Ensure NPM_TOKEN is set for private package access.
+# Always prefer the token from ~/.npmrc over an existing env var, because
+# project-level .npmrc files reference ${NPM_TOKEN} and the env var may
+# hold a stale or different token.
+if [ -f "$HOME/.npmrc" ]; then
+    EXTRACTED_TOKEN=$(grep '_authToken=' "$HOME/.npmrc" 2>/dev/null | grep -v '${NPM_TOKEN}' | sed 's/.*_authToken=//' | head -1)
+    if [ -n "$EXTRACTED_TOKEN" ]; then
+        export NPM_TOKEN="$EXTRACTED_TOKEN"
     fi
 fi
 

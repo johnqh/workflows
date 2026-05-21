@@ -354,14 +354,17 @@ def action_submit(args):
     token = generate_jwt(args.key_id, args.issuer_id, args.key_file)
     app_id = get_app_id(token, args.bundle_id)
 
-    # Determine which platforms are needed based on screenshot directories
+    # Determine which platforms are needed from info.json
+    info_path = os.path.join(args.app_store_dir, "info.json")
     needed_platforms = {"IOS"}  # Always create iOS version
-    if args.screenshots:
-        store_dir = os.path.join(args.app_store_dir, "screenshots", "store")
-        if os.path.isdir(store_dir):
-            for device_key in DEVICE_PLATFORM_MAP:
-                if os.path.isdir(os.path.join(store_dir, device_key)):
-                    needed_platforms.add(DEVICE_PLATFORM_MAP[device_key])
+    if os.path.isfile(info_path):
+        with open(info_path) as f:
+            info = json.load(f)
+        configured_platforms = info.get("appleAppStore", {}).get("platforms", {})
+        PLATFORM_MAP = {"ios": "IOS", "ipados": "IOS", "macos": "MAC_OS"}
+        for key in configured_platforms:
+            if key in PLATFORM_MAP:
+                needed_platforms.add(PLATFORM_MAP[key])
 
     # Create versions for each platform
     version_ids = {}
@@ -557,6 +560,8 @@ def update_localization(token, version_id, locale, listing):
         attrs["keywords"] = kw
     if listing.get("promotionalText"):
         attrs["promotionalText"] = listing["promotionalText"]
+    if listing.get("whatsNew"):
+        attrs["whatsNew"] = listing["whatsNew"]
     if listing.get("marketingUrl"):
         attrs["marketingUrl"] = listing["marketingUrl"]
     if listing.get("supportUrl"):
