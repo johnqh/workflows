@@ -1185,6 +1185,42 @@ commit_and_push() {
     return 0
 }
 
+# Detect and remove @sudobility symlinks created by bun link / npm link
+# These cause duplicate type resolution issues and must be replaced with
+# real npm-installed packages before validation.
+remove_sudobility_symlinks() {
+    local project_dir="$1"
+    local scope_dir="$project_dir/node_modules/@sudobility"
+
+    if [ ! -d "$scope_dir" ]; then
+        return 0
+    fi
+
+    local found_symlinks=()
+    for entry in "$scope_dir"/*/; do
+        [ -d "$entry" ] || continue
+        if [ -L "${entry%/}" ]; then
+            found_symlinks+=("$(basename "${entry%/}")")
+        fi
+    done
+
+    if [ ${#found_symlinks[@]} -eq 0 ]; then
+        return 0
+    fi
+
+    log_warning "Found ${#found_symlinks[@]} symlinked @sudobility package(s) (from bun/npm link):"
+    for pkg in "${found_symlinks[@]}"; do
+        local link_target
+        link_target=$(readlink "$scope_dir/$pkg" 2>/dev/null || echo "unknown")
+        log_warning "  @sudobility/$pkg -> $link_target"
+        rm "$scope_dir/$pkg"
+    done
+
+    log_info "Reinstalling to fetch packages from npm..."
+    pm_install >/dev/null 2>&1
+    log_success "Replaced symlinks with npm packages"
+}
+
 # Process a single project
 process_project() {
     local project_path="$1"
@@ -1211,6 +1247,9 @@ process_project() {
 
     # Detect package manager for this project
     detect_package_manager "$project_path"
+
+    # Detect and remove symlinks (e.g. from bun link) in node_modules/@sudobility
+    remove_sudobility_symlinks "$project_path"
 
     log_info "Updating @sudobility dependencies to latest..."
     local update_result=0
