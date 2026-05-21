@@ -381,7 +381,7 @@ fetch_latest_versions_parallel() {
 
     for package in "${packages[@]}"; do
         local safe_name="${package//\//_}"
-        ( npm view "${package}@latest" version --prefer-online 2>/dev/null > "$tmpdir/$safe_name" ) &
+        ( npm view "${package}@latest" version 2>/dev/null > "$tmpdir/$safe_name" ) &
         pids+=($!)
     done
 
