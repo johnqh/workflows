@@ -377,24 +377,36 @@ function generateRouteHtml(ctx, baseHtml, language, route) {
     `    <meta property="og:locale" content="${ctx.languageHreflangMap[language] || language}" />`
   );
 
-  // Twitter
+  // Twitter (supports both name= and property= attribute forms)
   html = updateTag(
     html,
-    /<meta property="twitter:url" content="[^"]*" \/>/,
-    `<meta property="twitter:url" content="${currentUrl}" />`,
-    `    <meta property="twitter:url" content="${currentUrl}" />`
+    /<meta (?:name|property)="twitter:url" content="[^"]*" \/>/,
+    `<meta name="twitter:url" content="${currentUrl}" />`,
+    `    <meta name="twitter:url" content="${currentUrl}" />`
   );
   html = updateTag(
     html,
-    /<meta property="twitter:title" content="[\s\S]*?" \/>/,
-    `<meta property="twitter:title" content="${escapeHtml(title)}" />`,
-    `    <meta property="twitter:title" content="${escapeHtml(title)}" />`
+    /<meta (?:name|property)="twitter:title" content="[\s\S]*?" \/>/,
+    `<meta name="twitter:title" content="${escapeHtml(title)}" />`,
+    `    <meta name="twitter:title" content="${escapeHtml(title)}" />`
   );
   html = updateTag(
     html,
-    /<meta property="twitter:description" content="[\s\S]*?" \/>/,
-    `<meta property="twitter:description" content="${escapeHtml(description)}" />`,
-    `    <meta property="twitter:description" content="${escapeHtml(description)}" />`
+    /<meta (?:name|property)="twitter:description" content="[\s\S]*?" \/>/,
+    `<meta name="twitter:description" content="${escapeHtml(description)}" />`,
+    `    <meta name="twitter:description" content="${escapeHtml(description)}" />`
+  );
+  html = updateTag(
+    html,
+    /<meta (?:name|property)="twitter:card" content="[^"]*" \/>/,
+    `<meta name="twitter:card" content="summary_large_image" />`,
+    `    <meta name="twitter:card" content="summary_large_image" />`
+  );
+  html = updateTag(
+    html,
+    /<meta (?:name|property)="twitter:image" content="[^"]*" \/>/,
+    `<meta name="twitter:image" content="${ctx.baseUrl}/og-image.png" />`,
+    `    <meta name="twitter:image" content="${ctx.baseUrl}/og-image.png" />`
   );
 
   // Strip old canonical and hreflang
