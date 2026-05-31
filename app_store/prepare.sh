@@ -238,7 +238,7 @@ if [ "$DEVICE_TYPE" = "emulator" ]; then
   else
     echo "Launching app..."
     "$ADB" -s "$SERIAL" shell am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n "${BUNDLE_ID}/.MainActivity" &>/dev/null || true
-    sleep 10
+    sleep 20
     echo "App launched."
   fi
 

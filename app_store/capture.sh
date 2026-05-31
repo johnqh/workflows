@@ -206,8 +206,9 @@ capture_screenshot() {
 }
 
 if [ "$LOOP_ORDER" = "paths_first" ]; then
-  # Outer: paths, inner: languages — best when each path loads heavy content
-  # (e.g. images) and language switches are lightweight.
+  # Outer: paths, inner: languages — must switch language before each capture
+  # because navigating directly to /{lang}{path} can crash the navigation tree
+  # when the language changes.
   for path_idx in "${!PATHS[@]}"; do
     path="${PATHS[$path_idx]}"
     seq=$((path_idx + 1))
