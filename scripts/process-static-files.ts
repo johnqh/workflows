@@ -7,7 +7,7 @@
  * with values from process.env (loaded from .env / .env.local).
  *
  * Template conventions:
- *   index_template.html        → index.html
+ *   index.template.html        → index.html
  *   public/foo.template.bar    → public/foo.bar
  *
  * Built-in variables:
@@ -71,17 +71,25 @@ interface TemplateFile {
  * Discover template files in the project.
  *
  * Looks for:
- *   - index_template.html at project root
+ *   - index.template.html at project root
  *   - *.template.* files in public/ (including subdirectories like .well-known/)
  */
 function discoverTemplates(): TemplateFile[] {
   const templates: TemplateFile[] = [];
 
-  // Check for index_template.html at project root
-  const indexTemplate = path.join(projectRoot, 'index_template.html');
-  if (fs.existsSync(indexTemplate)) {
+  // Check for index.template.html at project root. Fall back to the legacy
+  // index_template.html name so older projects keep building during migration.
+  const indexTemplate = path.join(projectRoot, 'index.template.html');
+  const legacyIndexTemplate = path.join(projectRoot, 'index_template.html');
+  const template = fs.existsSync(indexTemplate)
+    ? indexTemplate
+    : fs.existsSync(legacyIndexTemplate)
+      ? legacyIndexTemplate
+      : null;
+
+  if (template) {
     templates.push({
-      template: indexTemplate,
+      template,
       output: path.join(projectRoot, 'index.html'),
       label: 'index.html',
     });
