@@ -477,14 +477,17 @@ def create_or_get_editable_version(token, app_id, version_string, platform="IOS"
 
 def update_app_info_localization(token, app_id, locale, listing):
     """Update app-level localization (subtitle, name) via appInfoLocalizations."""
-    # Get the app's appInfo
-    resp = api_request("GET", f"/apps/{app_id}/appInfos?limit=1", token)
+    # Get the app's appInfos — each version has its own appInfo.
+    # We need the one in an editable state, not the live (locked) one.
+    resp = api_request("GET", f"/apps/{app_id}/appInfos", token)
     app_infos = resp.get("data", [])
     if not app_infos:
         print(f"  Warning: No appInfo found for app, skipping subtitle.", file=sys.stderr)
         return
 
-    app_info_id = app_infos[0]["id"]
+    live_states = {"READY_FOR_SALE", "REPLACED_WITH_NEW_VERSION", "REMOVED_FROM_SALE"}
+    editable = [ai for ai in app_infos if ai["attributes"].get("appStoreState") not in live_states]
+    app_info_id = editable[0]["id"] if editable else app_infos[0]["id"]
 
     # Get existing localizations
     resp = api_request(
