@@ -43,7 +43,8 @@ function printUsage() {
   console.error('  --env <file>       Path to .env file');
   console.error('  --batch-limit <n>  Max translations per API call (strings × languages, default: 50)');
   console.error('  --lang-batch <n>   Max languages per API call (default: all at once)');
-  console.error('  --word-limit <n>   Max words × languages per API call (default: 40)');
+  console.error('  --word-limit <n>   Target words × languages per API call (default: 40).')
+  console.error('                     Controls batching only — all strings are always translated.');
 }
 
 let localesDir = null;
@@ -219,9 +220,12 @@ function buildTargetObject(source, existing, newTranslations, lang, prefix = '')
       if (lang === 'ar') translated = cleanRTLText(translated);
       return translated;
     }
-    // No translation available — return undefined to omit from output
-    // (i18next will fall back to the source language at runtime)
-    return undefined;
+    // No translation available — keep the source string as fallback
+    // so the key exists in the output file and won't be re-translated
+    // as "missing" on subsequent runs (unless the file is cleared).
+    // i18next will display the English text until a proper translation
+    // is provided by a future run.
+    return source;
   }
 
   if (Array.isArray(source)) {
