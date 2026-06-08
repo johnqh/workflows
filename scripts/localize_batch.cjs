@@ -220,12 +220,10 @@ function buildTargetObject(source, existing, newTranslations, lang, prefix = '')
       if (lang === 'ar') translated = cleanRTLText(translated);
       return translated;
     }
-    // No translation available — keep the source string as fallback
-    // so the key exists in the output file and won't be re-translated
-    // as "missing" on subsequent runs (unless the file is cleared).
-    // i18next will display the English text until a proper translation
-    // is provided by a future run.
-    return source;
+    // No translation available — omit from output so the key stays
+    // "missing" for the next run. i18next will fall back to the source
+    // language at runtime.
+    return undefined;
   }
 
   if (Array.isArray(source)) {
