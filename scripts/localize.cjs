@@ -152,7 +152,6 @@ console.log('='.repeat(60));
 // List of target languages and their directory names
 // Maps our i18n language codes to DeepL API language codes
 const languages = {
-  ar: 'AR', // Arabic
   de: 'DE', // German
   es: 'ES', // Spanish
   fr: 'FR', // French
@@ -186,7 +185,6 @@ const LM_STUDIO_URL = `http://${llmHost}:${llmPort}/v1`;
 
 // Language name mapping for LM Studio
 const languageNames = {
-  AR: 'Arabic',
   DE: 'German',
   ES: 'Spanish',
   FR: 'French',
