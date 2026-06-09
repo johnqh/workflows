@@ -522,7 +522,7 @@ jobs:
 
       - name: "Create GitHub Release"
         if: steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true'
-        uses: softprops/action-gh-release@v2.2.1
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.check_for_release.outputs.version_tag }}
           name: "Release ${{ needs.check_for_release.outputs.version }}"
@@ -630,7 +630,7 @@ jobs:
 
       - name: "Create GitHub Release"
         if: steps.check-secrets.outputs.configured == 'true' && steps.check-pypi-version.outputs.version_exists != 'true'
-        uses: softprops/action-gh-release@v2.2.1
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.check_for_release.outputs.version_tag }}
           name: "Release ${{ needs.check_for_release.outputs.version }}"
