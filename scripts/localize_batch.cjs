@@ -131,7 +131,7 @@ if (!fs.existsSync(sourceDir)) {
 }
 
 const targetLanguages = [
-  'ar', 'de', 'es', 'fr', 'it', 'ja', 'ko',
+  'de', 'es', 'fr', 'it', 'ja', 'ko',
   'pt', 'ru', 'sv', 'th', 'uk', 'vi', 'zh', 'zh-hant',
 ];
 
