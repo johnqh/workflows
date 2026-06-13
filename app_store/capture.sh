@@ -12,6 +12,7 @@
 #   --device <key>      Device key from screens.json (required).
 #   --orientation <o>   landscape (default) or portrait. Landscape rotates tablet screenshots.
 #   --languages <list>  Comma-separated language codes to capture (default: all).
+#   --paths <list>      Comma-separated path values to capture (default: all). Must match paths.json entries.
 #   --delay <seconds>   Seconds to wait before capture (default: 8).
 #   --dry-run           Print actions without executing.
 
@@ -25,6 +26,7 @@ require_jq
 DEVICE_KEY=""
 ORIENTATION="landscape"
 LANGUAGES_FILTER=""
+PATHS_FILTER=""
 DELAY=8
 DRY_RUN=false
 
@@ -33,6 +35,7 @@ while [ $# -gt 0 ]; do
     --device)       DEVICE_KEY="$2"; shift 2 ;;
     --orientation)  ORIENTATION="$2"; shift 2 ;;
     --languages)    LANGUAGES_FILTER="$2"; shift 2 ;;
+    --paths)        PATHS_FILTER="$2"; shift 2 ;;
     --delay)        DELAY="$2"; shift 2 ;;
     --dry-run)      DRY_RUN=true; shift ;;
     -*)         echo "Unknown option: $1"; exit 1 ;;
@@ -107,8 +110,30 @@ else
   LANGUAGES=("${ALL_LANGUAGES[@]}")
 fi
 
+ALL_PATHS=()
+while IFS= read -r line; do ALL_PATHS+=("$line"); done < <(jq -r '.[]' "$PATHS_JSON")
+
+# Build parallel arrays of (index, path) so seq numbers match paths.json positions.
+# When --paths filters a subset, the original 1-based index is preserved.
+declare -a PATH_INDICES=()
 PATHS=()
-while IFS= read -r line; do PATHS+=("$line"); done < <(jq -r '.[]' "$PATHS_JSON")
+if [ -n "$PATHS_FILTER" ]; then
+  IFS=',' read -ra PATH_FILTER_ARR <<< "$PATHS_FILTER"
+  for i in "${!ALL_PATHS[@]}"; do
+    for filter in "${PATH_FILTER_ARR[@]}"; do
+      if [ "${ALL_PATHS[$i]}" = "$filter" ]; then
+        PATH_INDICES+=("$((i + 1))")
+        PATHS+=("${ALL_PATHS[$i]}")
+        break
+      fi
+    done
+  done
+else
+  for i in "${!ALL_PATHS[@]}"; do
+    PATH_INDICES+=("$((i + 1))")
+    PATHS+=("${ALL_PATHS[$i]}")
+  done
+fi
 
 # Read loop order from info.json (default: languages_first)
 LOOP_ORDER=$(jq -r '.capture.loopOrder // "languages_first"' "$INFO_JSON")
@@ -211,7 +236,7 @@ if [ "$LOOP_ORDER" = "paths_first" ]; then
   # when the language changes.
   for path_idx in "${!PATHS[@]}"; do
     path="${PATHS[$path_idx]}"
-    seq=$((path_idx + 1))
+    seq="${PATH_INDICES[$path_idx]}"
     for lang in "${LANGUAGES[@]}"; do
       switch_language "$lang"
       capture_screenshot "$lang" "$path" "$seq"
@@ -222,10 +247,8 @@ else
   # once, then capture all paths before moving to the next language.
   for lang in "${LANGUAGES[@]}"; do
     switch_language "$lang"
-    seq=0
-    for path in "${PATHS[@]}"; do
-      seq=$((seq + 1))
-      capture_screenshot "$lang" "$path" "$seq"
+    for path_idx in "${!PATHS[@]}"; do
+      capture_screenshot "$lang" "${PATHS[$path_idx]}" "${PATH_INDICES[$path_idx]}"
     done
   done
 fi

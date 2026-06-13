@@ -512,7 +512,7 @@ def compose_screenshot(raw_path, title, subtitle, config, frames_dir, frame_conf
         # Tablets/desktop: text at top-left, large tilted screenshot toward bottom-right
         text_area = (int(cw * 0.04), int(ch * 0.06), int(cw * 0.40), int(ch * 0.40))
 
-        shot_max_h = int(ch * 1.0) if config.is_desktop else int(ch * 0.95)
+        shot_max_h = int(ch * 0.95)
         scale = shot_max_h / sh
         scaled = shadowed.resize((int(sw * scale), int(sh * scale)), Image.LANCZOS)
 

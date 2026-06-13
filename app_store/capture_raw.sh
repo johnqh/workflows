@@ -26,6 +26,7 @@ require_jq
 declare -a PLATFORMS=()
 declare -a DEVICES=()
 LANGUAGES_FILTER=""
+PATHS_FILTER=""
 ORIENTATION="landscape"
 DELAY=8
 SKIP_BUILD=false
@@ -38,6 +39,7 @@ while [ $# -gt 0 ]; do
     --platform)      IFS=',' read -ra PLATFORMS <<< "$2"; shift 2 ;;
     --device)        DEVICES+=("$2"); shift 2 ;;
     --languages)     LANGUAGES_FILTER="$2"; shift 2 ;;
+    --paths)         PATHS_FILTER="$2"; shift 2 ;;
     --orientation)   ORIENTATION="$2"; shift 2 ;;
     --delay)         DELAY="$2"; shift 2 ;;
     --skip-build)    SKIP_BUILD=true; shift ;;
@@ -165,7 +167,9 @@ for device_key in "${DEVICE_KEYS[@]}"; do
   echo "--- Capturing screenshots for $device_key ---"
   LANG_FLAG=""
   [ -n "$LANGUAGES_FILTER" ] && LANG_FLAG="--languages $LANGUAGES_FILTER"
-  if ! "$SCRIPT_DIR/capture.sh" --device "$device_key" --orientation "$ORIENTATION" --delay "$DELAY" $LANG_FLAG $DRY_RUN_FLAG; then
+  PATHS_FLAG=""
+  [ -n "$PATHS_FILTER" ] && PATHS_FLAG="--paths $PATHS_FILTER"
+  if ! "$SCRIPT_DIR/capture.sh" --device "$device_key" --orientation "$ORIENTATION" --delay "$DELAY" $LANG_FLAG $PATHS_FLAG $DRY_RUN_FLAG; then
     echo "  Error: capture.sh failed for $device_key."
     failed_devices+=("$device_key")
   fi

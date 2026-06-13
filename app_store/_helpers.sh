@@ -470,7 +470,7 @@ set_emulator_orientation() {
 # Rotate a screenshot PNG 90° clockwise (for landscape screenshots from portrait framebuffer)
 rotate_screenshot_landscape() {
   local file="$1"
-  sips -r 270 "$file" --out "$file" &>/dev/null
+  sips -r 90 "$file" --out "$file" &>/dev/null
 }
 
 # ── Platform filter helpers ──────────────────────────────────────────────────
