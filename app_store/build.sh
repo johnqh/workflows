@@ -52,45 +52,63 @@ want_platform() {
 
 mkdir -p "$BUILDS_DIR/debug" "$BUILDS_DIR/release"
 
-echo "Merging environment files..."
-if [ "$DRY_RUN" = true ]; then
-  echo "  [dry-run] Would run: node scripts/merge-env.js"
-else
-  (cd "$PROJECT_DIR" && node scripts/merge-env.js 2>/dev/null || true)
+if [ "$PROJECT_TYPE" = "rn" ]; then
+  echo "Merging environment files..."
+  if [ "$DRY_RUN" = true ]; then
+    echo "  [dry-run] Would run: node scripts/merge-env.js"
+  else
+    (cd "$PROJECT_DIR" && node scripts/merge-env.js 2>/dev/null || true)
+  fi
+  echo ""
 fi
-echo ""
 
-# ── Sync app version from package.json ──────────────────────────────────────
+# ── Sync app version ────────────────────────────────────────────────────────
 
-FULL_VERSION=$(jq -r '.version' "$PROJECT_DIR/package.json")
+if [ "$PROJECT_TYPE" = "native" ]; then
+  FULL_VERSION=$(jq -r '.metadata.version // "1.0"' "$INFO_JSON")
+else
+  FULL_VERSION=$(jq -r '.version' "$PROJECT_DIR/package.json")
+fi
 APP_VERSION=$(echo "$FULL_VERSION" | cut -d. -f1-2)
-echo "Syncing app version: $APP_VERSION (from $FULL_VERSION)"
+BUILD_NUMBER=$(date +%Y%m%d%H%M)
+echo "App version: $APP_VERSION (build $BUILD_NUMBER, from $FULL_VERSION)"
 
-if [ "$DRY_RUN" = true ]; then
-  echo "  [dry-run] Would update platform version strings to $APP_VERSION"
+if [ "$PROJECT_TYPE" = "rn" ]; then
+  if [ "$DRY_RUN" = true ]; then
+    echo "  [dry-run] Would update platform version strings to $APP_VERSION"
+  else
+    IOS_PBXPROJ="$PROJECT_DIR/ios/$IOS_APP_NAME.xcodeproj/project.pbxproj"
+    if [ -f "$IOS_PBXPROJ" ]; then
+      sed -i '' "s/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = $APP_VERSION;/g" "$IOS_PBXPROJ"
+      echo "  Updated iOS MARKETING_VERSION"
+    fi
+    ANDROID_GRADLE="$PROJECT_DIR/android/app/build.gradle"
+    if [ -f "$ANDROID_GRADLE" ]; then
+      sed -i '' "s/versionName \"[^\"]*\"/versionName \"$APP_VERSION\"/" "$ANDROID_GRADLE"
+      echo "  Updated Android versionName"
+    fi
+    MACOS_PBXPROJ="$PROJECT_DIR/macos/$IOS_APP_NAME.xcodeproj/project.pbxproj"
+    if [ -f "$MACOS_PBXPROJ" ]; then
+      sed -i '' "s/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = $APP_VERSION;/g" "$MACOS_PBXPROJ"
+      echo "  Updated macOS MARKETING_VERSION"
+    fi
+  fi
 else
-  # iOS: update MARKETING_VERSION in pbxproj
-  IOS_PBXPROJ="$PROJECT_DIR/ios/$IOS_APP_NAME.xcodeproj/project.pbxproj"
-  if [ -f "$IOS_PBXPROJ" ]; then
-    sed -i '' "s/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = $APP_VERSION;/g" "$IOS_PBXPROJ"
-    echo "  Updated iOS MARKETING_VERSION"
-  fi
-
-  # Android: update versionName in build.gradle
-  ANDROID_GRADLE="$PROJECT_DIR/android/app/build.gradle"
-  if [ -f "$ANDROID_GRADLE" ]; then
-    sed -i '' "s/versionName \"[^\"]*\"/versionName \"$APP_VERSION\"/" "$ANDROID_GRADLE"
-    echo "  Updated Android versionName"
-  fi
-
-  # macOS: update MARKETING_VERSION in pbxproj
-  MACOS_PBXPROJ="$PROJECT_DIR/macos/$IOS_APP_NAME.xcodeproj/project.pbxproj"
-  if [ -f "$MACOS_PBXPROJ" ]; then
-    sed -i '' "s/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = $APP_VERSION;/g" "$MACOS_PBXPROJ"
-    echo "  Updated macOS MARKETING_VERSION"
-  fi
+  echo "  Native build: version injected via xcodebuild build settings (pbxproj untouched)."
 fi
 echo ""
+
+# ── Native xcodebuild argument selection ────────────────────────────────────
+
+if [ "$PROJECT_TYPE" = "native" ]; then
+  IOS_TARGET_ARGS=(-project "$PROJECT_DIR/$IOS_PROJECT")
+  IOS_VERSION_OVERRIDES=(MARKETING_VERSION="$APP_VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER")
+  IOS_DERIVED_DATA="$BUILDS_DIR/derived"
+else
+  IOS_TARGET_ARGS=(-workspace "$PROJECT_DIR/ios/$IOS_WORKSPACE")
+  IOS_VERSION_OVERRIDES=()
+  IOS_DERIVED_DATA="$PROJECT_DIR/ios/build"
+fi
 
 # ── iOS debug build ─────────────────────────────────────────────────────────
 
@@ -105,13 +123,14 @@ if want_platform ios && [ "$DEBUG" = true ]; then
     if [ "$DRY_RUN" = true ]; then
       echo "  [dry-run] Would run xcodebuild build for iphonesimulator"
     else
-      IOS_BUILD_DIR="$PROJECT_DIR/ios/build"
+      IOS_BUILD_DIR="$IOS_DERIVED_DATA"
       xcodebuild \
-        -workspace "$PROJECT_DIR/ios/$IOS_WORKSPACE" \
+        "${IOS_TARGET_ARGS[@]}" \
         -scheme "$IOS_SCHEME" \
         -configuration Debug \
         -sdk iphonesimulator \
         -derivedDataPath "$IOS_BUILD_DIR" \
+        "${IOS_VERSION_OVERRIDES[@]}" \
         -quiet \
         build
 
@@ -148,11 +167,12 @@ if want_platform ios && [ "$RELEASE" = true ]; then
       rm -rf "$IOS_ARCHIVE"
 
       xcodebuild archive \
-        -workspace "$PROJECT_DIR/ios/$IOS_WORKSPACE" \
+        "${IOS_TARGET_ARGS[@]}" \
         -scheme "$IOS_SCHEME" \
         -configuration Release \
         -sdk iphoneos \
         -archivePath "$IOS_ARCHIVE" \
+        "${IOS_VERSION_OVERRIDES[@]}" \
         -quiet
 
       if [ ! -d "$IOS_ARCHIVE" ]; then
