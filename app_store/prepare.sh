@@ -48,22 +48,24 @@ echo "Type:     $DEVICE_TYPE"
 echo "Name:     $DEVICE_NAME"
 echo ""
 
-# ── Ensure Metro is running ───────────────────────────────────────────────────
+# ── Ensure Metro is running (React Native only) ───────────────────────────────
 
-if [ "$DRY_RUN" = true ]; then
-  echo "[dry-run] Would ensure Metro bundler is running"
-else
-  start_metro
-  wait_for_metro_ready
+if [ "$PROJECT_TYPE" = "rn" ]; then
+  if [ "$DRY_RUN" = true ]; then
+    echo "[dry-run] Would ensure Metro bundler is running"
+  else
+    start_metro
+    wait_for_metro_ready
 
-  # Pre-compile the bundle for this platform so captures don't show loading screens
-  case "$DEVICE_TYPE" in
-    simulator) wait_for_bundle_compiled "ios" ;;
-    emulator)  wait_for_bundle_compiled "android" ;;
-    native)    wait_for_bundle_compiled "macos" ;;
-  esac
+    # Pre-compile the bundle for this platform so captures don't show loading screens
+    case "$DEVICE_TYPE" in
+      simulator) wait_for_bundle_compiled "ios" ;;
+      emulator)  wait_for_bundle_compiled "android" ;;
+      native)    wait_for_bundle_compiled "macos" ;;
+    esac
+  fi
+  echo ""
 fi
-echo ""
 
 # ── iOS / iPadOS ─────────────────────────────────────────────────────────────
 
