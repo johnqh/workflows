@@ -51,11 +51,15 @@ if [ ! -f "$ENV_FILE" ]; then
 fi
 source "$ENV_FILE"
 
-# ── Read package version ─────────────────────────────────────────────────────
+# ── Read app version ─────────────────────────────────────────────────────────
 
-FULL_VERSION=$(jq -r '.version' "$PROJECT_DIR/package.json")
+if [ "$PROJECT_TYPE" = "native" ]; then
+  FULL_VERSION=$(jq -r '.metadata.version // "1.0"' "$APP_STORE_DIR/info.json")
+else
+  FULL_VERSION=$(jq -r '.version' "$PROJECT_DIR/package.json")
+fi
 PACKAGE_VERSION=$(echo "$FULL_VERSION" | cut -d. -f1-2)
-echo "Package version: $PACKAGE_VERSION (from $FULL_VERSION)"
+echo "App version: $PACKAGE_VERSION (from $FULL_VERSION)"
 
 # ── Process platforms ────────────────────────────────────────────────────────
 
