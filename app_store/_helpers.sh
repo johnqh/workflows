@@ -30,6 +30,18 @@ MACOS_PROCESS_NAME=$(jq -r '.build.macos.processName // .build.macos.appName // 
 MACOS_WORKSPACE=$(jq -r '.build.macos.workspace // .build.ios.workspace // (.build.ios.appName // .app.name) + ".xcworkspace"' "$INFO_JSON")
 MACOS_SCHEME=$(jq -r '.build.macos.scheme // empty' "$INFO_JSON")
 
+IOS_PROJECT=$(jq -r '.build.ios.project // empty' "$INFO_JSON")
+
+# Detect project type: React Native (has package.json) vs native Xcode project.
+# RN is the default to preserve existing behavior for apps like sudojo.
+if [ -f "$PROJECT_DIR/package.json" ]; then
+  PROJECT_TYPE="rn"
+elif [ -n "$IOS_PROJECT" ] || ls "$PROJECT_DIR"/*.xcodeproj >/dev/null 2>&1; then
+  PROJECT_TYPE="native"
+else
+  PROJECT_TYPE="rn"
+fi
+
 ANDROID_EMULATOR="${ANDROID_HOME:-$HOME/Library/Android/sdk}/emulator/emulator"
 ADB="${ANDROID_HOME:-$HOME/Library/Android/sdk}/platform-tools/adb"
 
