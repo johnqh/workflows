@@ -19,6 +19,7 @@ workflows/
 │   └── unified-cicd.yml              # The reusable CI/CD workflow (~824 lines)
 ├── scripts/
 │   ├── generate-seo-assets.mjs        # Multilingual SEO generator (sitemap, robots, per-route HTML)
+│   ├── generate-seo-assets-v2.mjs     # v2: sitemap index + per-language sitemaps, head hooks, JSON-LD
 │   ├── process-static-files.ts       # Generic {{...}} template processor for static files
 │   ├── localize.cjs                  # LLM-first i18n translation (LM Studio + DeepL fallback)
 │   ├── localize_batch.cjs            # Batch translation via Whisperly API
@@ -119,6 +120,27 @@ node generate-seo-assets.mjs --config ./seo.config.mjs dist
 ```json
 "seo:fetch": "curl -fsSL https://raw.githubusercontent.com/johnqh/workflows/main/scripts/generate-seo-assets.mjs -o /tmp/generate-seo-assets.mjs",
 "build": "bun run seo:fetch && node /tmp/generate-seo-assets.mjs public && tsc -b && vite build && node /tmp/generate-seo-assets.mjs dist"
+```
+
+### SEO Asset Generator v2 (`scripts/generate-seo-assets-v2.mjs`)
+
+Drop-in successor to `generate-seo-assets.mjs`. The original is kept unchanged so existing projects are unaffected; opt into v2 per project by fetching `generate-seo-assets-v2.mjs` instead. Same `seo.config.mjs` contract.
+
+**What v2 adds over v1:**
+- **Sitemap index**: `sitemap.xml` is now a `<sitemapindex>` pointing at per-language `sitemap-<lang>.xml` children (English listed first). Each child holds only its language's `<loc>` entries plus the full hreflang cluster. This lets you submit the English sitemap first in Search Console so English pages are crawled/indexed ahead of translations (mitigates "Crawled - currently not indexed" on large multilingual URL sets) while keeping every language discoverable.
+- Managed `<head>` injection (`stripManagedHead` + `buildManagedMetaBlock`) instead of per-tag regex replacement.
+- Route-level `staticHtml(locale, ctx, route)` and `structuredData(locale, ctx, route)` hooks for crawlable fallback content and JSON-LD.
+- `cleanText` + unresolved-`{{placeholder}}` assertion on meta fields.
+- `trailingSlashUrls` control and per-route `namespaces` / `ogType` (defaults to `website`).
+- Richer `robots.txt` covering standard search engines + AI crawlers.
+
+**Migration caveat:** any consumer that reads `sitemap.xml` as a flat `<urlset>` (e.g. a prerender step extracting `<loc>` page URLs) must resolve the `<sitemapindex>` to its child sitemaps first — `sitemap.xml`'s `<loc>`s are now child-sitemap files, not pages.
+
+**Usage** (identical CLI to v1):
+```bash
+node generate-seo-assets-v2.mjs public
+node generate-seo-assets-v2.mjs dist
+node generate-seo-assets-v2.mjs --config ./seo.config.mjs dist
 ```
 
 ### Localization Script (`scripts/localize.cjs`)
