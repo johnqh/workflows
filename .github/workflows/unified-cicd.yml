@@ -36,6 +36,14 @@ on:
         description: "Python package manager: uv or pip (only for Python projects)"
         type: string
         default: "uv"
+      pypi-publish:
+        description: "Publish Python packages to PyPI when a pyproject.toml project changes version"
+        type: boolean
+        default: false
+      pypi-repository-url:
+        description: "Optional PyPI repository URL (for example, https://test.pypi.org/legacy/)"
+        type: string
+        default: ""
     secrets:
       NPM_TOKEN:
         description: "NPM authentication token for publishing and installing private packages"
@@ -563,22 +571,31 @@ jobs:
       - test
       - check_for_release
     if: |
+      inputs.pypi-publish == true &&
       needs.check_for_release.outputs.should_release == 'true' &&
       needs.check_for_release.outputs.has_pyproject_toml == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: "Check if PyPI secrets are configured"
+      - name: "Check if PyPI token is configured"
         id: check-secrets
         run: |
           if [ -n "${{ secrets.PYPI_TOKEN }}" ]; then
             echo "configured=true" >> $GITHUB_OUTPUT
+            echo "mode=token" >> $GITHUB_OUTPUT
             echo "✅ PYPI_TOKEN is configured"
           else
             echo "configured=false" >> $GITHUB_OUTPUT
-            echo "ℹ️  PYPI_TOKEN not configured, skipping PyPI publishing"
+            echo "mode=skip" >> $GITHUB_OUTPUT
+            echo "ℹ️  PYPI_TOKEN not configured"
           fi
+
+      - name: "Skip PyPI publishing"
+        if: steps.check-secrets.outputs.configured != 'true'
+        run: |
+          echo "ℹ️  PyPI publishing is disabled for this run."
+          echo "ℹ️  Configure PYPI_TOKEN to use the reusable workflow, or use a repository-local wrapper workflow for Trusted Publishing (OIDC)."
 
       - name: "Checkout"
         if: steps.check-secrets.outputs.configured == 'true'
@@ -596,15 +613,20 @@ jobs:
         run: |
           CURRENT_VERSION="${{ needs.check_for_release.outputs.version }}"
           PACKAGE_NAME="${{ needs.check_for_release.outputs.package_name }}"
+          REPOSITORY_URL="${{ inputs.pypi-repository-url }}"
 
           echo "Package: $PACKAGE_NAME"
           echo "Current version: $CURRENT_VERSION"
 
-          pip install httpx 2>/dev/null
           PUBLISHED_VERSION=$(python3 -c "
           import urllib.request, json
           try:
-              resp = urllib.request.urlopen(f'https://pypi.org/pypi/${PACKAGE_NAME}/json')
+              base = '${REPOSITORY_URL}'.rstrip('/')
+              if base.endswith('/legacy'):
+                  base = base[:-7]
+              if not base:
+                  base = 'https://pypi.org'
+              resp = urllib.request.urlopen(f'{base}/pypi/${PACKAGE_NAME}/json')
               data = json.loads(resp.read())
               print(data['info']['version'])
           except Exception:
@@ -644,6 +666,7 @@ jobs:
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+          TWINE_REPOSITORY_URL: ${{ inputs.pypi-repository-url }}
 
       - name: "Notify deployment success"
         if: success() && steps.check-secrets.outputs.configured == 'true' && steps.check-pypi-version.outputs.version_exists != 'true'

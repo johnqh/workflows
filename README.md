@@ -7,6 +7,7 @@ This repository contains reusable GitHub Actions workflows for the Web3 Email ec
 The unified CI/CD workflow provides:
 - ✅ **Automated testing** with Node.js 22.x
 - 📦 **NPM publishing** - automatically triggered when `NPM_TOKEN` is configured
+- 🐍 **Python package publishing** - enabled with `pypi-publish: true` and `PYPI_TOKEN`
 - 🐳 **Docker deployment** - automatically triggered when Docker Hub secrets are configured
 - ☁️ **Cloudflare Pages deployment** - automatically triggered when Cloudflare secrets are configured
 - 🔒 **Security checks** and linting
@@ -36,6 +37,29 @@ jobs:
       npm-access: "restricted"  # or "public"
     secrets:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+```
+
+### For Python Library Projects (PyPI)
+
+```yaml
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  cicd:
+    uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
+    with:
+      python-version: "3.11"
+      python-package-manager: "uv"
+      pypi-publish: true
+      # pypi-repository-url: "https://test.pypi.org/legacy/"  # optional
+    secrets:
+      PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
 ```
 
 ### For Docker Applications (Docker Only)
@@ -111,6 +135,10 @@ jobs:
 | `skip-npm-publish` | boolean | No | `false` | Skip NPM publishing even if `NPM_TOKEN` is configured (useful for apps that need `NPM_TOKEN` only for private dependencies) |
 | `notification-email` | string | No | `""` | Email address to notify on test failures (only used for `develop` branch) |
 | `node-version` | string | No | `22.x` | Node.js version to use |
+| `python-version` | string | No | `3.11` | Python version to use for Python projects |
+| `python-package-manager` | string | No | `uv` | Python package manager: `uv` or `pip` |
+| `pypi-publish` | boolean | No | `false` | Publish Python packages to PyPI when a `pyproject.toml` project changes version |
+| `pypi-repository-url` | string | No | `""` | Optional PyPI repository URL, for example `https://test.pypi.org/legacy/` |
 | `cloudflare-project-name` | string | No | repo name | Cloudflare Pages project name (only used if Cloudflare secrets are set) |
 | `docker-image-name` | string | No | repo name | Docker image name (only used if Docker Hub secrets are set) |
 
@@ -121,6 +149,7 @@ The workflow automatically detects which deployment targets to use based on conf
 | Secret | Triggers | Description |
 |--------|----------|-------------|
 | `NPM_TOKEN` | 📦 NPM publishing | NPM authentication token. When set, publishes package to NPM on version changes. |
+| `PYPI_TOKEN` | 🐍 PyPI publishing | PyPI API token. When set with `pypi-publish: true`, publishes Python packages on version changes. |
 | `DOCKERHUB_USERNAME` + `DOCKERHUB_TOKEN` | 🐳 Docker deployment | Docker Hub credentials. When both are set, builds and pushes Docker images. |
 | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | ☁️ Cloudflare Pages | Cloudflare credentials. When both are set, deploys to Cloudflare Pages. |
 | `RAILWAY_TOKEN` + `RAILWAY_SERVICE` | 🚂 Railway deployment | Railway credentials. When both are set, deploys to Railway. |
@@ -146,6 +175,13 @@ Always runs:
 Automatically runs:
 - 📦 Publishes to NPM (if version changed)
 - 🏷️ Creates GitHub release with tag
+
+### When PYPI_TOKEN is set
+
+Automatically runs:
+- 🐍 Publishes to PyPI when `pypi-publish: true`
+- 🏷️ Creates GitHub release with tag
+- 🔁 Supports alternate repository URLs such as TestPyPI via `pypi-repository-url`
 
 ### When Docker Hub secrets are set
 
@@ -330,6 +366,16 @@ secrets:
   NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
 
+### tapayoka_lib (Python Library)
+```yaml
+with:
+  python-version: "3.11"
+  python-package-manager: "uv"
+  pypi-publish: true
+secrets:
+  PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+```
+
 ### wildduck (NPM + Docker)
 ```yaml
 with:
@@ -378,6 +424,13 @@ secrets:
 - Ensure `CLOUDFLARE_API_TOKEN` has Pages edit permissions
 - Verify `CLOUDFLARE_ACCOUNT_ID` is correct
 - Check that build outputs to `dist/` directory
+
+### PyPI publish fails or is skipped
+
+- Ensure `pypi-publish: true` is set for Python library workflows
+- Ensure `PYPI_TOKEN` is configured if you are using the reusable workflow
+- Use `pypi-repository-url: "https://test.pypi.org/legacy/"` for TestPyPI
+- If you want PyPI Trusted Publishing with OIDC, use a repository-local workflow with `permissions: id-token: write` and `pypa/gh-action-pypi-publish`
 
 ### Tests/linting/typecheck skipped
 

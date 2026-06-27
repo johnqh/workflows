@@ -6,6 +6,7 @@ This guide explains how to configure secrets for each deployment option in the u
 
 - [Version Pinning](#version-pinning)
 - [NPM Registry](#npm-registry)
+- [PyPI Registry](#pypi-registry)
 - [Docker Hub](#docker-hub)
 - [Cloudflare Pages](#cloudflare-pages)
 - [Railway](#railway)
@@ -107,6 +108,65 @@ Deploy your packages to the NPM registry (npmjs.com).
 
 - Set `npm-access` input to `public` or `restricted` in your workflow file
 - For scoped packages (e.g., `@sudobility/package`), use `restricted` unless you want them public
+
+---
+
+## PyPI Registry
+
+**Project Type:** `python`
+
+Deploy Python packages to PyPI from the reusable workflow with a token, or use a repository-local wrapper workflow for PyPI Trusted Publishing (OIDC).
+
+### Reusable Workflow: Token-Based Publishing
+
+#### Required Secrets
+
+| Secret Name | Description |
+|------------|-------------|
+| `PYPI_TOKEN` | PyPI API token for publishing packages |
+
+#### Additional Configuration
+
+- Set `pypi-publish: true` in the workflow input
+- Optionally set `pypi-repository-url` to target TestPyPI or another index endpoint
+- The reusable workflow publishes only when `PYPI_TOKEN` is configured
+
+### How to Get `PYPI_TOKEN`
+
+1. Log in to [pypi.org](https://pypi.org/)
+2. Open **Account settings** and create an **API token**
+3. Add the token to GitHub repository secrets as `PYPI_TOKEN`
+
+### Trusted Publishing (OIDC)
+
+PyPI Trusted Publishing is configured on the PyPI project itself and uses GitHub Actions OIDC.
+
+Use a repository-local workflow when you want OIDC:
+
+```yaml
+name: Publish
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: python -m build
+      - uses: pypa/gh-action-pypi-publish@release/v1
+```
+
+The reusable workflow does not perform trusted publishing inside the reusable job. Use the token-based path above if you want the shared workflow to handle publishing.
 
 ---
 

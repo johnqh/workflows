@@ -1,0 +1,31 @@
+---
+# Example CI/CD workflow for PYTHON library projects
+# Projects: tapayoka_lib, other shared Python packages
+#
+# Publishes to PyPI when PYPI_TOKEN is configured
+# Copy this file to your project's .github/workflows/ci-cd.yml
+
+name: CI/CD
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write      # For creating GitHub releases
+  deployments: write   # For deployment tracking
+
+jobs:
+  cicd:
+    uses: johnqh/workflows/.github/workflows/unified-cicd.yml@v1
+    with:
+      python-version: "3.11"
+      python-package-manager: "uv"
+      pypi-publish: true
+      # pypi-repository-url: "https://test.pypi.org/legacy/"  # Optional for TestPyPI
+    secrets:
+      PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
