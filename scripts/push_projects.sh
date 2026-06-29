@@ -111,7 +111,12 @@ pm_install() {
             if [ ${#packages[@]} -eq 0 ]; then
                 bun install
             else
-                bun add "${packages[@]}"
+                if ! bun add "${packages[@]}"; then
+                    log_warning "bun add failed; retrying dependency update via npm install fallback"
+                    npm install "${packages[@]}" --save-exact=false --legacy-peer-deps
+                    rm -f package-lock.json
+                    bun install
+                fi
             fi
             ;;
         pnpm)
