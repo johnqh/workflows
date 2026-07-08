@@ -128,6 +128,21 @@ jobs:
         with:
           python-version: ${{ inputs.python-version }}
 
+      - name: "Configure git for private Python dependencies"
+        if: steps.detect-pm.outputs.manager == 'python'
+        env:
+          GIT_DEP_TOKEN: ${{ secrets.GIT_DEP_TOKEN }}
+        run: |
+          if [ -n "$GIT_DEP_TOKEN" ]; then
+            # --add is required: both insteadOf values map onto the same url.<base>
+            # key, and a plain `git config` would clobber the first.
+            git config --global --add url."https://x-access-token:${GIT_DEP_TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
+            git config --global --add url."https://x-access-token:${GIT_DEP_TOKEN}@github.com/".insteadOf "git@github.com:"
+            echo "✅ git URL rewrite configured for private dependencies"
+          else
+            echo "ℹ️  GIT_DEP_TOKEN not set, skipping git rewrite"
+          fi
+
       - name: "Install Python dependencies"
         if: steps.detect-pm.outputs.manager == 'python'
         run: |
