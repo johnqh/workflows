@@ -1,4 +1,19 @@
 ---
+# REQUIRED CALLER PERMISSIONS
+# GitHub validates a reusable workflow's job permissions at compile time, before
+# any job's `if:` is evaluated. This workflow contains jobs that request, across
+# all of them, the union: contents:write (releases/tags), id-token:write (npm
+# provenance in release_npm) and deployments:write (deploy_cloudflare/vercel).
+# A caller that grants fewer scopes than this union fails at startup
+# ("startup_failure", no logs) even if those jobs would skip. Every caller —
+# including Python-only callers that publish nothing — must therefore declare:
+#
+#   permissions:
+#     contents: write
+#     id-token: write
+#     deployments: write
+#
+# default_workflow_permissions may stay at "read"; the block above is what matters.
 name: "Unified CI/CD - Reusable Workflow"
 
 on:
