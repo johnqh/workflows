@@ -39,6 +39,16 @@ on:
       GIT_DEP_TOKEN:
         description: "GitHub PAT with read-only Contents access to private repos used as git dependencies"
         required: false
+    outputs:
+      released:
+        description: "'true' if a new tag/release was created on this run"
+        value: ${{ jobs.release.outputs.released }}
+      version:
+        description: "The project version (from pyproject.toml)"
+        value: ${{ jobs.release.outputs.version }}
+      tag:
+        description: "The git tag (vX.Y.Z)"
+        value: ${{ jobs.release.outputs.tag }}
 
 jobs:
   test:
@@ -156,6 +166,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      # 'true' only when a new tag was actually cut this run.
+      released: ${{ steps.version.outputs.skip == 'false' && steps.check-tag.outputs.exists == 'false' }}
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - name: "Checkout"
         uses: actions/checkout@v6
