@@ -44,6 +44,18 @@ on:
         description: "Optional PyPI repository URL (for example, https://test.pypi.org/legacy/)"
         type: string
         default: ""
+      github-release:
+        description: "Create a git tag and GitHub Release for Python projects, independent of PyPI publishing"
+        type: boolean
+        default: false
+      python-extras:
+        description: "Comma-separated extras to install for Python projects (pip only), e.g. 'dev,ws'. Empty installs no extras."
+        type: string
+        default: "dev"
+      python-strict:
+        description: "Fail the build when ruff or pytest are missing after install, and let mypy failures fail the build"
+        type: boolean
+        default: false
     secrets:
       NPM_TOKEN:
         description: "NPM authentication token for publishing and installing private packages"
@@ -77,6 +89,9 @@ on:
         required: false
       PYPI_TOKEN:
         description: "PyPI API token for publishing Python packages"
+        required: false
+      GIT_DEP_TOKEN:
+        description: "GitHub PAT with read-only Contents access to private repos used as git dependencies"
         required: false
 
 jobs:
