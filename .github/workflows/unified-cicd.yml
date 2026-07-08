@@ -145,8 +145,10 @@ jobs:
 
       - name: "Install Python dependencies"
         if: steps.detect-pm.outputs.manager == 'python'
+        env:
+          PM: ${{ inputs.python-package-manager }}
+          EXTRAS: ${{ inputs.python-extras }}
         run: |
-          PM="${{ inputs.python-package-manager }}"
           if [ "$PM" == "uv" ]; then
             echo "📦 Installing with uv"
             pip install uv
@@ -154,10 +156,34 @@ jobs:
           else
             echo "📦 Installing with pip"
             if [ -f "pyproject.toml" ]; then
-              pip install -e ".[dev]"
+              if [ -n "$EXTRAS" ]; then
+                echo "📦 Installing extras: $EXTRAS"
+                pip install -e ".[$EXTRAS]"
+              else
+                pip install -e .
+              fi
             elif [ -f "requirements.txt" ]; then
               pip install -r requirements.txt
             fi
+          fi
+
+      - name: "Verify Python tooling (strict)"
+        if: steps.detect-pm.outputs.manager == 'python' && inputs.python-strict
+        run: |
+          # pip exits 0 with only a WARNING when an extra does not exist, so a
+          # missing dev extra otherwise yields a green run that ran zero tests.
+          missing=0
+          for tool in pytest ruff; do
+            if command -v "$tool" &>/dev/null; then
+              echo "✅ $tool present"
+            else
+              echo "❌ $tool not installed but python-strict is enabled"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "Add these to [project.optional-dependencies] and pass them via python-extras."
+            exit 1
           fi
 
       - name: "Python lint"
@@ -175,10 +201,16 @@ jobs:
 
       - name: "Python type check"
         if: steps.detect-pm.outputs.manager == 'python'
+        env:
+          STRICT: ${{ inputs.python-strict }}
         run: |
           if command -v mypy &> /dev/null; then
             echo "📝 Running mypy"
-            mypy src/ --ignore-missing-imports || true
+            if [ "$STRICT" == "true" ]; then
+              mypy src/ --ignore-missing-imports
+            else
+              mypy src/ --ignore-missing-imports || true
+            fi
           else
             echo "ℹ️  mypy not installed, skipping type check"
           fi
