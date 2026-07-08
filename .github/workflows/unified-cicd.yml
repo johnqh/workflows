@@ -743,6 +743,59 @@ jobs:
           echo "❌ PyPI release deployment FAILED for commit ${{ github.sha }}"
           echo "Check: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
+  release_python:
+    name: "Tag and GitHub Release (Python)"
+    needs:
+      - test
+      - check_for_release
+    # pypi-publish != true avoids a double release: release_pypi already
+    # creates a GitHub Release when it publishes.
+    if: |
+      inputs.github-release == true &&
+      inputs.pypi-publish != true &&
+      needs.check_for_release.outputs.should_release == 'true' &&
+      needs.check_for_release.outputs.has_pyproject_toml == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: "Check if tag already exists"
+        id: check-tag
+        env:
+          TAG: ${{ needs.check_for_release.outputs.version_tag }}
+        run: |
+          # check_for_release sets should_release=true on every main push and
+          # never compares against existing tags, so guard here.
+          git fetch --tags --quiet
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "ℹ️  Tag $TAG already exists, skipping release"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "✅ Tag $TAG does not exist, will create"
+          fi
+
+      - name: "Create GitHub Release"
+        if: steps.check-tag.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.check_for_release.outputs.version_tag }}
+          name: "Release ${{ needs.check_for_release.outputs.version }}"
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Notify"
+        if: success() && steps.check-tag.outputs.exists == 'false'
+        run: |
+          echo "🏷️  Tagged ${{ needs.check_for_release.outputs.version_tag }}"
+          echo "• GitHub: https://github.com/${{ github.repository }}/releases/tag/${{ needs.check_for_release.outputs.version_tag }}"
+
   deploy_docker:
     name: "Deploy to Docker Hub"
     needs:
