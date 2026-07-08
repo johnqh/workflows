@@ -920,6 +920,27 @@ sync_rn_native_versions() {
     fi
 }
 
+# Rewrite git+ssh pinned Python deps in a downstream pyproject.toml
+# Usage: update_python_git_deps <pyproject-path> <dep-name> <new-version>
+update_python_git_deps() {
+    local pyproject="$1"
+    local dep="$2"
+    local new_version="$3"
+
+    if [ ! -f "$pyproject" ]; then
+        return 0
+    fi
+
+    if ! grep -q "${dep} @ git+ssh://" "$pyproject"; then
+        return 0
+    fi
+
+    log_info "Updating ${dep} pin to v${new_version} in $pyproject"
+    sed -i.bak -E "s|(${dep} @ git\+ssh://[^@]*@github\.com/[^@]*)@v[0-9]+\.[0-9]+\.[0-9]+|\1@v${new_version}|" "$pyproject"
+    rm -f "$pyproject.bak"
+    log_success "Pin updated to v${new_version}"
+}
+
 # Bump version in package.json
 bump_version() {
     local project_dir="$1"
@@ -941,6 +962,13 @@ bump_version() {
         # Update version in pyproject.toml
         sed -i.bak "s/^version = \"$current_version\"/version = \"$new_version\"/" "$pyproject" && rm -f "$pyproject.bak"
         log_success "Version bumped to $new_version"
+
+        # Propagate this version into downstream git+ssh pins. push_all.sh walks
+        # repos in dependency order, so consumers are processed after this one.
+        if [ "$(basename "$project_dir")" = "tapayoka_pi_core" ]; then
+            update_python_git_deps "$(dirname "$project_dir")/tapayoka_pi/pyproject.toml" \
+                "tapayoka-pi-core" "$new_version"
+        fi
         return 0
     fi
 
