@@ -1,0 +1,213 @@
+---
+# Python-only reusable CI/CD.
+#
+# Split out from unified-cicd.yml so that Python callers need to grant only
+# `contents: write` (for the tag/release), instead of the full
+# contents+id-token+deployments union that unified-cicd.yml's npm/deploy jobs
+# force at compile time. Use this for pure-Python repos that do not publish to
+# npm/PyPI and do not deploy to Cloudflare/Vercel/Docker.
+#
+# REQUIRED CALLER PERMISSIONS:
+#   permissions:
+#     contents: write
+name: "Python CI/CD - Reusable Workflow"
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: "Python version to use"
+        type: string
+        default: "3.11"
+      python-package-manager:
+        description: "Python package manager: uv or pip"
+        type: string
+        default: "pip"
+      python-extras:
+        description: "Comma-separated extras to install (pip only), e.g. 'dev,ws'. Empty installs no extras."
+        type: string
+        default: "dev"
+      python-strict:
+        description: "Fail the build when ruff or pytest are missing after install, and let mypy failures fail the build"
+        type: boolean
+        default: false
+      github-release:
+        description: "Create a git tag and GitHub Release on push to main"
+        type: boolean
+        default: true
+    secrets:
+      GIT_DEP_TOKEN:
+        description: "GitHub PAT with read-only Contents access to private repos used as git dependencies"
+        required: false
+
+jobs:
+  test:
+    name: "Test"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v6
+
+      - name: "Setup Python"
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: "Configure git for private Python dependencies"
+        env:
+          GIT_DEP_TOKEN: ${{ secrets.GIT_DEP_TOKEN }}
+        run: |
+          if [ -n "$GIT_DEP_TOKEN" ]; then
+            # --add is required: both insteadOf values map onto the same url.<base>
+            # key, and a plain `git config` would clobber the first.
+            git config --global --add url."https://x-access-token:${GIT_DEP_TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
+            git config --global --add url."https://x-access-token:${GIT_DEP_TOKEN}@github.com/".insteadOf "git@github.com:"
+            echo "✅ git URL rewrite configured for private dependencies"
+          else
+            echo "ℹ️  GIT_DEP_TOKEN not set, skipping git rewrite"
+          fi
+
+      - name: "Install Python dependencies"
+        env:
+          PM: ${{ inputs.python-package-manager }}
+          EXTRAS: ${{ inputs.python-extras }}
+        run: |
+          if [ "$PM" == "uv" ]; then
+            echo "📦 Installing with uv"
+            pip install uv
+            uv sync
+          else
+            echo "📦 Installing with pip"
+            if [ -f "pyproject.toml" ]; then
+              if [ -n "$EXTRAS" ]; then
+                echo "📦 Installing extras: $EXTRAS"
+                pip install -e ".[$EXTRAS]"
+              else
+                pip install -e .
+              fi
+            elif [ -f "requirements.txt" ]; then
+              pip install -r requirements.txt
+            fi
+          fi
+
+      - name: "Verify Python tooling (strict)"
+        if: inputs.python-strict
+        run: |
+          # pip exits 0 with only a WARNING when an extra does not exist, so a
+          # missing dev extra otherwise yields a green run that ran zero tests.
+          missing=0
+          for tool in pytest ruff; do
+            if command -v "$tool" &>/dev/null; then
+              echo "✅ $tool present"
+            else
+              echo "❌ $tool not installed but python-strict is enabled"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "Add these to [project.optional-dependencies] and pass them via python-extras."
+            exit 1
+          fi
+
+      - name: "Python lint"
+        run: |
+          if command -v ruff &> /dev/null; then
+            echo "🔍 Running ruff"
+            ruff check .
+          elif [ -f "pyproject.toml" ] && grep -q "ruff" pyproject.toml 2>/dev/null; then
+            echo "🔍 Running ruff (from dev deps)"
+            ruff check .
+          else
+            echo "ℹ️  No Python linter configured, skipping"
+          fi
+
+      - name: "Python type check"
+        env:
+          STRICT: ${{ inputs.python-strict }}
+        run: |
+          if command -v mypy &> /dev/null; then
+            echo "📝 Running mypy"
+            if [ "$STRICT" == "true" ]; then
+              mypy src/ --ignore-missing-imports
+            else
+              mypy src/ --ignore-missing-imports || true
+            fi
+          else
+            echo "ℹ️  mypy not installed, skipping type check"
+          fi
+
+      - name: "Python tests"
+        run: |
+          if command -v pytest &> /dev/null; then
+            echo "🧪 Running pytest"
+            pytest -m "not integration" -v
+          else
+            echo "ℹ️  pytest not installed, skipping tests"
+          fi
+
+  release:
+    name: "Tag and GitHub Release (Python)"
+    needs: test
+    # Only release on a push to main; develop and PRs run tests only.
+    if: |
+      inputs.github-release == true &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: "Resolve version and tag"
+        id: version
+        run: |
+          COMMIT_MSG=$(git log -1 --pretty=%s)
+          if [[ "$COMMIT_MSG" == *"[skip ci]"* ]] || [[ "$COMMIT_MSG" == *"[skip-ci]"* ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "ℹ️  Commit marked to skip CI: $COMMIT_MSG"
+            exit 0
+          fi
+          if [ ! -f "pyproject.toml" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "ℹ️  No pyproject.toml, skipping release"
+            exit 0
+          fi
+          VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: "Check if tag already exists"
+        id: check-tag
+        if: steps.version.outputs.skip == 'false'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git fetch --tags --quiet
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "ℹ️  Tag $TAG already exists, skipping release"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "✅ Tag $TAG does not exist, will create"
+          fi
+
+      - name: "Create GitHub Release"
+        if: steps.version.outputs.skip == 'false' && steps.check-tag.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "Release ${{ steps.version.outputs.version }}"
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Notify"
+        if: success() && steps.version.outputs.skip == 'false' && steps.check-tag.outputs.exists == 'false'
+        run: |
+          echo "🏷️  Tagged ${{ steps.version.outputs.tag }}"
+          echo "• GitHub: https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }}"
