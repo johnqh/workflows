@@ -22,13 +22,13 @@
 These must exist before starting. Verify, do not assume.
 
 - [ ] **actionlint installed.** `command -v actionlint` currently fails on this machine.
-  Install: `brew install actionlint`. Required by `workflows/scripts/lint-workflows.sh`.
+      Install: `brew install actionlint`. Required by `workflows/scripts/lint-workflows.sh`.
 - [ ] **Docker installed.** `docker` is currently **not on PATH** on this machine.
-  Task 10 cannot be verified without it. Either install Docker Desktop, or accept that
-  Task 10 ships unverified and say so explicitly.
+      Task 10 cannot be verified without it. Either install Docker Desktop, or accept that
+      Task 10 ships unverified and say so explicitly.
 - [ ] **`tapayoka_pi` working tree is clean.** It currently has uncommitted work:
-  `M README.md`, `M src/command_handler.py`, `M tests/test_command_handler.py`,
-  `?? docs/pins.md`, `?? src/pin_mapping.py`. Commit or stash before Task 8.
+      `M README.md`, `M src/command_handler.py`, `M tests/test_command_handler.py`,
+      `?? docs/pins.md`, `?? src/pin_mapping.py`. Commit or stash before Task 8.
 
 ---
 
@@ -37,9 +37,11 @@ These must exist before starting. Verify, do not assume.
 Pure surface-area addition. No step reads these yet, so behavior for all 111 callers is unchanged.
 
 **Files:**
+
 - Modify: `~/projects/workflows/.github/workflows/unified-cicd.yml:43-80`
 
 **Interfaces:**
+
 - Produces: inputs `github-release` (boolean, default `false`), `python-extras` (string, default `"dev"`), `python-strict` (boolean, default `false`); secret `GIT_DEP_TOKEN` (not required). Tasks 2, 3, 4 consume these.
 
 - [ ] **Step 1: Add the three inputs**
@@ -47,18 +49,18 @@ Pure surface-area addition. No step reads these yet, so behavior for all 111 cal
 Insert immediately after the `pypi-repository-url` input block (which ends at `:47` with `default: ""`), before the `secrets:` key:
 
 ```yaml
-      github-release:
-        description: "Create a git tag and GitHub Release for Python projects, independent of PyPI publishing"
-        type: boolean
-        default: false
-      python-extras:
-        description: "Comma-separated extras to install for Python projects (pip only), e.g. 'dev,ws'. Empty installs no extras."
-        type: string
-        default: "dev"
-      python-strict:
-        description: "Fail the build when ruff or pytest are missing after install, and let mypy failures fail the build"
-        type: boolean
-        default: false
+github-release:
+    description: 'Create a git tag and GitHub Release for Python projects, independent of PyPI publishing'
+    type: boolean
+    default: false
+python-extras:
+    description: "Comma-separated extras to install for Python projects (pip only), e.g. 'dev,ws'. Empty installs no extras."
+    type: string
+    default: 'dev'
+python-strict:
+    description: 'Fail the build when ruff or pytest are missing after install, and let mypy failures fail the build'
+    type: boolean
+    default: false
 ```
 
 - [ ] **Step 2: Add the secret**
@@ -66,9 +68,9 @@ Insert immediately after the `pypi-repository-url` input block (which ends at `:
 Append to the `secrets:` block, after the `PYPI_TOKEN` entry:
 
 ```yaml
-      GIT_DEP_TOKEN:
-        description: "GitHub PAT with read-only Contents access to private repos used as git dependencies"
-        required: false
+GIT_DEP_TOKEN:
+    description: 'GitHub PAT with read-only Contents access to private repos used as git dependencies'
+    required: false
 ```
 
 - [ ] **Step 3: Verify the YAML parses and lints**
@@ -117,9 +119,11 @@ Do NOT push. All four `workflows` tasks push together at the end of Task 4, to m
 ## Task 2: Install private git dependencies (W2)
 
 **Files:**
+
 - Modify: `~/projects/workflows/.github/workflows/unified-cicd.yml` — insert a step before "Install Python dependencies" (`:116`)
 
 **Interfaces:**
+
 - Consumes: secret `GIT_DEP_TOKEN` from Task 1.
 - Produces: a global git URL rewrite so `pip` can clone private repos over HTTPS with a token. Task 8's `git+ssh://` dependency relies on this.
 
@@ -128,18 +132,18 @@ Do NOT push. All four `workflows` tasks push together at the end of Task 4, to m
 Insert between the "Setup Python" step (ends `:114`) and the "Install Python dependencies" step (begins `:116`):
 
 ```yaml
-      - name: "Configure git for private Python dependencies"
-        if: steps.detect-pm.outputs.manager == 'python'
-        env:
-          GIT_DEP_TOKEN: ${{ secrets.GIT_DEP_TOKEN }}
-        run: |
-          if [ -n "$GIT_DEP_TOKEN" ]; then
-            git config --global --add url."https://x-access-token:${GIT_DEP_TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
-            git config --global --add url."https://x-access-token:${GIT_DEP_TOKEN}@github.com/".insteadOf "git@github.com:"
-            echo "✅ git URL rewrite configured for private dependencies"
-          else
-            echo "ℹ️  GIT_DEP_TOKEN not set, skipping git rewrite"
-          fi
+- name: 'Configure git for private Python dependencies'
+  if: steps.detect-pm.outputs.manager == 'python'
+  env:
+      GIT_DEP_TOKEN: ${{ secrets.GIT_DEP_TOKEN }}
+  run: |
+      if [ -n "$GIT_DEP_TOKEN" ]; then
+        git config --global --add url."https://x-access-token:${GIT_DEP_TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
+        git config --global --add url."https://x-access-token:${GIT_DEP_TOKEN}@github.com/".insteadOf "git@github.com:"
+        echo "✅ git URL rewrite configured for private dependencies"
+      else
+        echo "ℹ️  GIT_DEP_TOKEN not set, skipping git rewrite"
+      fi
 ```
 
 `--add` is required: two `insteadOf` values map onto the same `url.<base>` key, and plain `git config` would overwrite the first.
@@ -187,9 +191,11 @@ git commit -m "feat(ci): rewrite git+ssh URLs to token HTTPS when GIT_DEP_TOKEN 
 Three defects, one task — they share a test cycle (a Python CI run) and a reviewer would accept or reject them together.
 
 **Files:**
+
 - Modify: `~/projects/workflows/.github/workflows/unified-cicd.yml:116-160`
 
 **Interfaces:**
+
 - Consumes: inputs `python-extras`, `python-strict` from Task 1.
 - Produces: a Python test job that fails loudly when tooling is absent. Tasks 7 and 9 set `python-strict: true`.
 
@@ -197,7 +203,7 @@ Three defects, one task — they share a test cycle (a Python CI run) and a revi
 
 - [ ] **Step 1: Write the failing test**
 
-There is no unit-test harness for GitHub Actions YAML. The real failing test is a live CI run, and it is Task 7 Step 2 — where `tapayoka_pi_core` gets `python-strict: true` *before* it has a `dev` extra, and CI **must go red**. That is the red phase. Do not skip it.
+There is no unit-test harness for GitHub Actions YAML. The real failing test is a live CI run, and it is Task 7 Step 2 — where `tapayoka_pi_core` gets `python-strict: true` _before_ it has a `dev` extra, and CI **must go red**. That is the red phase. Do not skip it.
 
 What can be tested here in isolation is the strict-check shell logic:
 
@@ -241,28 +247,28 @@ Expected: prints the two ❌ lines and `exit=0`.
 Replace `:116-131` in full:
 
 ```yaml
-      - name: "Install Python dependencies"
-        if: steps.detect-pm.outputs.manager == 'python'
-        run: |
-          PM="${{ inputs.python-package-manager }}"
-          EXTRAS="${{ inputs.python-extras }}"
-          if [ "$PM" == "uv" ]; then
-            echo "📦 Installing with uv"
-            pip install uv
-            uv sync
+- name: 'Install Python dependencies'
+  if: steps.detect-pm.outputs.manager == 'python'
+  run: |
+      PM="${{ inputs.python-package-manager }}"
+      EXTRAS="${{ inputs.python-extras }}"
+      if [ "$PM" == "uv" ]; then
+        echo "📦 Installing with uv"
+        pip install uv
+        uv sync
+      else
+        echo "📦 Installing with pip"
+        if [ -f "pyproject.toml" ]; then
+          if [ -n "$EXTRAS" ]; then
+            echo "📦 Installing extras: $EXTRAS"
+            pip install -e ".[$EXTRAS]"
           else
-            echo "📦 Installing with pip"
-            if [ -f "pyproject.toml" ]; then
-              if [ -n "$EXTRAS" ]; then
-                echo "📦 Installing extras: $EXTRAS"
-                pip install -e ".[$EXTRAS]"
-              else
-                pip install -e .
-              fi
-            elif [ -f "requirements.txt" ]; then
-              pip install -r requirements.txt
-            fi
+            pip install -e .
           fi
+        elif [ -f "requirements.txt" ]; then
+          pip install -r requirements.txt
+        fi
+      fi
 ```
 
 - [ ] **Step 4: Add the tooling verification step**
@@ -270,24 +276,24 @@ Replace `:116-131` in full:
 Insert immediately after the install step:
 
 ```yaml
-      - name: "Verify Python tooling (strict)"
-        if: steps.detect-pm.outputs.manager == 'python' && inputs.python-strict
-        run: |
-          # pip exits 0 with only a WARNING when an extra does not exist,
-          # so a missing dev extra otherwise produces a green run with zero tests.
-          missing=0
-          for tool in pytest ruff; do
-            if command -v "$tool" &>/dev/null; then
-              echo "✅ $tool present"
-            else
-              echo "❌ $tool not installed but python-strict is enabled"
-              missing=1
-            fi
-          done
-          if [ "$missing" -ne 0 ]; then
-            echo "Add these to your [project.optional-dependencies] and pass them via python-extras."
-            exit 1
-          fi
+- name: 'Verify Python tooling (strict)'
+  if: steps.detect-pm.outputs.manager == 'python' && inputs.python-strict
+  run: |
+      # pip exits 0 with only a WARNING when an extra does not exist,
+      # so a missing dev extra otherwise produces a green run with zero tests.
+      missing=0
+      for tool in pytest ruff; do
+        if command -v "$tool" &>/dev/null; then
+          echo "✅ $tool present"
+        else
+          echo "❌ $tool not installed but python-strict is enabled"
+          missing=1
+        fi
+      done
+      if [ "$missing" -ne 0 ]; then
+        echo "Add these to your [project.optional-dependencies] and pass them via python-extras."
+        exit 1
+      fi
 ```
 
 - [ ] **Step 5: Make mypy able to fail under strict**
@@ -295,19 +301,19 @@ Insert immediately after the install step:
 Replace the "Python type check" step (`:146-153`):
 
 ```yaml
-      - name: "Python type check"
-        if: steps.detect-pm.outputs.manager == 'python'
-        run: |
-          if command -v mypy &> /dev/null; then
-            echo "📝 Running mypy"
-            if [ "${{ inputs.python-strict }}" == "true" ]; then
-              mypy src/ --ignore-missing-imports
-            else
-              mypy src/ --ignore-missing-imports || true
-            fi
-          else
-            echo "ℹ️  mypy not installed, skipping type check"
-          fi
+- name: 'Python type check'
+  if: steps.detect-pm.outputs.manager == 'python'
+  run: |
+      if command -v mypy &> /dev/null; then
+        echo "📝 Running mypy"
+        if [ "${{ inputs.python-strict }}" == "true" ]; then
+          mypy src/ --ignore-missing-imports
+        else
+          mypy src/ --ignore-missing-imports || true
+        fi
+      else
+        echo "ℹ️  mypy not installed, skipping type check"
+      fi
 ```
 
 With `python-strict` defaulting to `false`, the `|| true` path is what all 110 existing callers keep getting.
@@ -342,66 +348,68 @@ git commit -m "feat(ci): add python-extras and python-strict; stop silently skip
 ## Task 4: Tag and GitHub Release without PyPI (W1)
 
 **Files:**
+
 - Modify: `~/projects/workflows/.github/workflows/unified-cicd.yml` — add a new job after `release_pypi` ends (`:682`), before `deploy_docker:` (`:684`)
 
 **Interfaces:**
+
 - Consumes: input `github-release` from Task 1; `check_for_release` outputs `should_release`, `version`, `version_tag`, `has_pyproject_toml`.
 - Produces: a git tag `v${version}` and a GitHub Release. Task 8 pins against this tag.
 
-**Background:** `release_pypi` (`:568`) is the only job that tags a Python repo, gated on `pypi-publish == true` (`:574`). `check_for_release` (`:309-405`) sets `should_release=true` on **every** non-develop `main` push lacking `[skip ci]` — it never compares against existing tags. Its own comment at `:405`: *"Each deploy job will check its own registry for version existence."* A git-tag job has no registry, so it needs its own guard or it re-tags the same version on every push.
+**Background:** `release_pypi` (`:568`) is the only job that tags a Python repo, gated on `pypi-publish == true` (`:574`). `check_for_release` (`:309-405`) sets `should_release=true` on **every** non-develop `main` push lacking `[skip ci]` — it never compares against existing tags. Its own comment at `:405`: _"Each deploy job will check its own registry for version existence."_ A git-tag job has no registry, so it needs its own guard or it re-tags the same version on every push.
 
 - [ ] **Step 1: Add the `release_python` job**
 
 Insert after the `release_pypi` job's final step and before `  deploy_docker:`:
 
 ```yaml
-  release_python:
-    name: "Tag and GitHub Release (Python)"
+release_python:
+    name: 'Tag and GitHub Release (Python)'
     needs:
-      - test
-      - check_for_release
+        - test
+        - check_for_release
     if: |
-      inputs.github-release == true &&
-      inputs.pypi-publish != true &&
-      needs.check_for_release.outputs.should_release == 'true' &&
-      needs.check_for_release.outputs.has_pyproject_toml == 'true'
+        inputs.github-release == true &&
+        inputs.pypi-publish != true &&
+        needs.check_for_release.outputs.should_release == 'true' &&
+        needs.check_for_release.outputs.has_pyproject_toml == 'true'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+        contents: write
     steps:
-      - name: "Checkout"
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
+        - name: 'Checkout'
+          uses: actions/checkout@v6
+          with:
+              fetch-depth: 0
 
-      - name: "Check if tag already exists"
-        id: check-tag
-        run: |
-          TAG="${{ needs.check_for_release.outputs.version_tag }}"
-          git fetch --tags --quiet
-          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-            echo "ℹ️  Tag $TAG already exists, skipping release"
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-            echo "✅ Tag $TAG does not exist, will create"
-          fi
+        - name: 'Check if tag already exists'
+          id: check-tag
+          run: |
+              TAG="${{ needs.check_for_release.outputs.version_tag }}"
+              git fetch --tags --quiet
+              if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+                echo "exists=true" >> $GITHUB_OUTPUT
+                echo "ℹ️  Tag $TAG already exists, skipping release"
+              else
+                echo "exists=false" >> $GITHUB_OUTPUT
+                echo "✅ Tag $TAG does not exist, will create"
+              fi
 
-      - name: "Create GitHub Release"
-        if: steps.check-tag.outputs.exists == 'false'
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ needs.check_for_release.outputs.version_tag }}
-          name: "Release ${{ needs.check_for_release.outputs.version }}"
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        - name: 'Create GitHub Release'
+          if: steps.check-tag.outputs.exists == 'false'
+          uses: softprops/action-gh-release@v3
+          with:
+              tag_name: ${{ needs.check_for_release.outputs.version_tag }}
+              name: 'Release ${{ needs.check_for_release.outputs.version }}'
+              generate_release_notes: true
+          env:
+              GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: "Notify"
-        if: success() && steps.check-tag.outputs.exists == 'false'
-        run: |
-          echo "🏷️  Tagged ${{ needs.check_for_release.outputs.version_tag }}"
-          echo "• GitHub: https://github.com/${{ github.repository }}/releases/tag/${{ needs.check_for_release.outputs.version_tag }}"
+        - name: 'Notify'
+          if: success() && steps.check-tag.outputs.exists == 'false'
+          run: |
+              echo "🏷️  Tagged ${{ needs.check_for_release.outputs.version_tag }}"
+              echo "• GitHub: https://github.com/${{ github.repository }}/releases/tag/${{ needs.check_for_release.outputs.version_tag }}"
 ```
 
 `inputs.pypi-publish != true` prevents a double release when both flags are on — `release_pypi` already cuts a GitHub Release at `:654-661`.
@@ -462,7 +470,7 @@ git log --oneline origin/main..HEAD
 git diff origin/main..HEAD -- .github/workflows/unified-cicd.yml
 ```
 
-Ask explicitly: *"This pushes to `workflows` main, which 111 repos consume unpinned. Push?"*
+Ask explicitly: _"This pushes to `workflows` main, which 111 repos consume unpinned. Push?"_
 Only on a clear yes:
 
 ```bash
@@ -495,11 +503,13 @@ This is a user action. The agent cannot create a PAT.
 **Files:** none.
 
 **Interfaces:**
+
 - Produces: repo secret `GIT_DEP_TOKEN` on `johnqh/tapayoka_pi`. Task 9 consumes it.
 
 - [ ] **Step 1: User creates a fine-grained PAT**
 
 Direct the user to <https://github.com/settings/personal-access-tokens/new>:
+
 - Resource owner: `johnqh`
 - Repository access: **Only select repositories** → `tapayoka_pi_core`
 - Permissions: **Repository permissions → Contents → Read-only**
@@ -532,11 +542,13 @@ Expected: a row named `GIT_DEP_TOKEN`.
 `python-strict: true` runs `ruff check .` for real. Core currently has **19 ruff errors** under `select = ["E","F","I","W"]` at line-length 100 — mostly `E501` (long lines) and an unsorted `__init__.py` import block. Fix before enabling strict, or Task 7's green phase can never be reached.
 
 **Files:**
+
 - Modify: `~/projects/tapayoka_pi_core/src/tapayoka_pi_core/policy.py`
 - Modify: `~/projects/tapayoka_pi_core/src/tapayoka_pi_core/__init__.py`
 - Modify: `~/projects/tapayoka_pi_core/tests/test_policy.py`
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces: a lint-clean core. Task 7 depends on it.
 
@@ -604,10 +616,12 @@ git commit -m "style: make core lint-clean under ruff E,F,I,W at line-length 100
 ## Task 7: Give `tapayoka_pi_core` a dev extra and a CI wrapper
 
 **Files:**
+
 - Modify: `~/projects/tapayoka_pi_core/pyproject.toml`
 - Create: `~/projects/tapayoka_pi_core/.github/workflows/ci-cd.yml`
 
 **Interfaces:**
+
 - Consumes: inputs `python-strict`, `github-release` from Task 1; the strict check from Task 3; the `release_python` job from Task 4.
 - Produces: git tag `v0.1.0` on `johnqh/tapayoka_pi_core`. Task 8 pins to it.
 
@@ -622,23 +636,23 @@ Create `~/projects/tapayoka_pi_core/.github/workflows/ci-cd.yml`:
 name: CI/CD
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    push:
+        branches: [main]
+    pull_request:
+        branches: [main]
 
 permissions:
-  contents: write
+    contents: write
 
 jobs:
-  cicd:
-    uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
-    with:
-      python-version: "3.11"
-      python-package-manager: "pip"
-      python-strict: true
-      pypi-publish: false
-      github-release: true
+    cicd:
+        uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
+        with:
+            python-version: '3.11'
+            python-package-manager: 'pip'
+            python-strict: true
+            pypi-publish: false
+            github-release: true
 ```
 
 - [ ] **Step 2: Push and verify CI goes RED**
@@ -718,7 +732,7 @@ Then confirm pytest genuinely ran — not skipped:
 
 ```bash
 cd ~/projects/tapayoka_pi_core
-gh run view --log | grep -E 'test_policy|passed|✅ pytest present'
+run view --log | grep -E 'test_policy|passed|✅ pytest present'
 ```
 
 Expected: `✅ pytest present`, collected items from `tests/test_policy.py`, and a `passed` summary. The string "pytest not installed, skipping tests" must NOT appear.
@@ -741,9 +755,11 @@ If no tag appears, read the `release_python` job's log before proceeding — Tas
 ## Task 8: Point `tapayoka_pi` at the git dependency
 
 **Files:**
+
 - Modify: `~/projects/tapayoka_pi/pyproject.toml:1-11`
 
 **Interfaces:**
+
 - Consumes: tag `v0.1.0` from Task 7.
 - Produces: a `tapayoka_pi` that installs from git. Tasks 9 and 10 depend on it.
 
@@ -864,9 +880,11 @@ Do not push yet — CI will fail until Task 9 adds `GIT_DEP_TOKEN` handling to t
 ## Task 9: Migrate `tapayoka_pi` onto the shared workflow
 
 **Files:**
+
 - Modify: `~/projects/tapayoka_pi/.github/workflows/ci-cd.yml` (replace entirely)
 
 **Interfaces:**
+
 - Consumes: `GIT_DEP_TOKEN` secret from Task 5; `python-extras`, `python-strict`, `github-release` from Task 1.
 - Produces: green CI on `tapayoka_pi` — the first since 2026-06-24.
 
@@ -881,26 +899,26 @@ Overwrite `~/projects/tapayoka_pi/.github/workflows/ci-cd.yml`:
 name: CI/CD
 
 on:
-  push:
-    branches: [main, develop]
-  pull_request:
-    branches: [main]
+    push:
+        branches: [main, develop]
+    pull_request:
+        branches: [main]
 
 permissions:
-  contents: write
+    contents: write
 
 jobs:
-  cicd:
-    uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
-    with:
-      python-version: "3.11"
-      python-package-manager: "pip"
-      python-extras: "dev,ws"
-      python-strict: true
-      pypi-publish: false
-      github-release: true
-    secrets:
-      GIT_DEP_TOKEN: ${{ secrets.GIT_DEP_TOKEN }}
+    cicd:
+        uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
+        with:
+            python-version: '3.11'
+            python-package-manager: 'pip'
+            python-extras: 'dev,ws'
+            python-strict: true
+            pypi-publish: false
+            github-release: true
+        secrets:
+            GIT_DEP_TOKEN: ${{ secrets.GIT_DEP_TOKEN }}
 ```
 
 `python-extras: "dev,ws"` — the `ws` extra carries `websockets`, needed by `TapayokaWsPeripheral`. The old workflow installed only `[dev]`, so any test touching the WebSocket transport was running against a missing import or being skipped.
@@ -951,10 +969,12 @@ Expected: `v0.1.0` (matching `tapayoka_pi`'s own `version = "0.1.0"`).
 ## Task 10: Fix the Dockerfile
 
 **Files:**
+
 - Modify: `~/projects/tapayoka_pi/Dockerfile` (replace entirely)
 - Modify: `~/projects/tapayoka_pi/docker-compose.yml:4-5`
 
 **Interfaces:**
+
 - Consumes: the git dependency from Task 8.
 - Produces: a buildable image that actually contains bluezero and RPi.GPIO.
 
@@ -1013,9 +1033,9 @@ The `# syntax=` line enables `--mount=type=ssh`. `.[pi]` pulls the `ble` + `gpio
 In `~/projects/tapayoka_pi/docker-compose.yml`, replace `build: .` (line 5):
 
 ```yaml
-    build:
-      context: .
-      ssh:
+build:
+    context: .
+    ssh:
         - default
 ```
 
@@ -1066,9 +1086,11 @@ git commit -m "fix(docker): multi-stage build with ssh mount, install [pi] extra
 Without this, every core release requires a manual edit of `tapayoka_pi/pyproject.toml`. That step gets forgotten and ships stale firmware policy.
 
 **Files:**
+
 - Modify: `~/projects/workflows/scripts/push_projects.sh` — add a function near `bump_version()` (`:924`)
 
 **Interfaces:**
+
 - Consumes: `PKG_MANAGER == "python"`, the bumped version from `bump_version()`.
 - Produces: rewritten `git+ssh://...@vX.Y.Z` pins in downstream `pyproject.toml` files.
 
@@ -1114,6 +1136,7 @@ grep '^version' pyproject.toml
 ```
 
 Expected:
+
 - pin now reads `...tapayoka_pi_core@v0.1.1`
 - `eth-account>=0.13.0` untouched
 - `version = "0.2.0"` untouched (the regex must not touch the project's own version)
@@ -1229,8 +1252,8 @@ Expected: success. A private caller of a public reusable workflow is supported; 
 ## Out of Scope — recorded, not implemented
 
 - **Private-index support in `unified-cicd.yml`.** Three latent bugs remain, harmless only because nothing sets `pypi-repository-url`:
-  - `:621-635` — the "already published?" guard fetches `{base}/pypi/{name}/json`, an API served **only** by pypi.org and test.pypi.org. Against any other index the request raises, the bare `except` prints `0.0.0`, and the guard concludes "not published" every time, then attempts an upload that 400s. It fails silently in the unsafe direction.
-  - `:665` — `twine upload dist/*` lacks `--skip-existing`.
-  - `:667` — `TWINE_USERNAME` hardcoded to `__token__`; AWS CodeArtifact requires `aws`.
+    - `:621-635` — the "already published?" guard fetches `{base}/pypi/{name}/json`, an API served **only** by pypi.org and test.pypi.org. Against any other index the request raises, the bare `except` prints `0.0.0`, and the guard concludes "not published" every time, then attempts an upload that 400s. It fails silently in the unsafe direction.
+    - `:665` — `twine upload dist/*` lacks `--skip-existing`.
+    - `:667` — `TWINE_USERNAME` hardcoded to `__token__`; AWS CodeArtifact requires `aws`.
 - **`deploy_docker` for `tapayoka_pi`.** That job needs Docker Hub secrets, which are unset, so it never runs. If enabled later it will need `GIT_DEP_TOKEN` plumbed into the Docker build as a BuildKit secret — the SSH-agent approach in Task 10 does not exist on a runner.
 - **`tapayoka_pi_pico`.** MicroPython, manual build, vendors its own copy of the core.
