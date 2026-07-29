@@ -102,6 +102,17 @@ run_with_timeout() {
     return $exit_code
 }
 
+# True when the current branch has commits the remote does not.
+#
+# Working-tree cleanliness alone is NOT a safe "nothing to do" signal: a repo
+# whose work is committed but never pushed looks identical to an untouched one,
+# which silently strands commits and lets a published package drift ahead of
+# its git history.
+has_unpushed_commits() {
+    git rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1 || return 1
+    [ "$(git rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)" -gt 0 ]
+}
+
 # Run package manager install command
 pm_install() {
     local packages=("$@")
@@ -112,10 +123,21 @@ pm_install() {
                 bun install
             else
                 if ! bun add "${packages[@]}"; then
-                    log_warning "bun add failed; retrying dependency update via npm install fallback"
-                    npm install "${packages[@]}" --save-exact=false --legacy-peer-deps
-                    rm -f package-lock.json
-                    bun install
+                    # A stale bun manifest cache reports
+                    #   No version matching "^X.Y.Z" found ... (but package exists)
+                    # for versions that ARE published -- `npm view` confirms them.
+                    # This is the dominant failure in a publish cascade: each
+                    # publish immediately stales the cache for the next consumer.
+                    # Waiting cannot fix it because nothing is propagating, so
+                    # clear and retry before the heavier npm fallback.
+                    log_warning "bun add failed; clearing bun manifest cache and retrying"
+                    bun pm cache rm >/dev/null 2>&1 || true
+                    if ! bun add "${packages[@]}"; then
+                        log_warning "bun add still failing; retrying dependency update via npm install fallback"
+                        npm install "${packages[@]}" --save-exact=false --legacy-peer-deps
+                        rm -f package-lock.json
+                        bun install
+                    fi
                 fi
             fi
             ;;
@@ -1162,33 +1184,40 @@ commit_and_push() {
     local project_dir="$1"
     local project_name="$2"
 
+    local needs_commit=true
     if git diff --quiet && git diff --cached --quiet; then
-        log_info "No changes to commit"
-        return 0
+        needs_commit=false
+        if ! has_unpushed_commits; then
+            log_info "No changes to commit and nothing unpushed"
+            return 0
+        fi
+        log_info "No changes to commit, but commits are ahead of upstream -- pushing them"
     fi
 
-    log_info "Committing changes..."
+    if [ "$needs_commit" = true ]; then
+        log_info "Committing changes..."
 
-    git add -A
+        git add -A
 
-    local version=$(node -e "console.log(require('./package.json').version)" 2>/dev/null || echo "unknown")
+        local version=$(node -e "console.log(require('./package.json').version)" 2>/dev/null || echo "unknown")
 
-    local commit_msg
+        local commit_msg
 
-    # Try AI-generated commit message first, fall back to heuristic
-    if [ "$AI_COMMIT" = true ]; then
-        commit_msg=$(generate_ai_commit_message "$version" "$project_name" 2>/dev/null) || true
-    fi
+        # Try AI-generated commit message first, fall back to heuristic
+        if [ "$AI_COMMIT" = true ]; then
+            commit_msg=$(generate_ai_commit_message "$version" "$project_name" 2>/dev/null) || true
+        fi
 
-    if [ -z "$commit_msg" ]; then
-        commit_msg=$(analyze_changes "$version" "$FORCE_MODE")
-    fi
+        if [ -z "$commit_msg" ]; then
+            commit_msg=$(analyze_changes "$version" "$FORCE_MODE")
+        fi
 
-    if git commit -m "$commit_msg" >/dev/null 2>&1; then
-        log_success "Changes committed"
-    else
-        log_error "Failed to commit changes"
-        return 1
+        if git commit -m "$commit_msg" >/dev/null 2>&1; then
+            log_success "Changes committed"
+        else
+            log_error "Failed to commit changes"
+            return 1
+        fi
     fi
 
     log_info "Pushing to remote..."
@@ -1319,13 +1348,25 @@ process_project() {
         has_changes=true
     fi
 
+    # Committed-but-unpushed work counts as a change. Without this the project
+    # is skipped, its commits never reach the remote, and CI never publishes --
+    # while the run still reports success.
+    local has_unpushed=false
+    if has_unpushed_commits; then
+        has_unpushed=true
+    fi
+
     if [ "$has_changes" = true ]; then
         log_info "Changed files:"
         git diff --name-only
         git diff --cached --name-only
     fi
 
-    if [ "$has_changes" = false ] && [ "$FORCE_MODE" = false ]; then
+    if [ "$has_changes" = false ] && [ "$has_unpushed" = true ]; then
+        log_info "No working-tree changes, but $(git rev-list --count '@{u}..HEAD' 2>/dev/null) commit(s) ahead of upstream -- proceeding so they are pushed"
+    fi
+
+    if [ "$has_changes" = false ] && [ "$has_unpushed" = false ] && [ "$FORCE_MODE" = false ]; then
         log_info "No changes detected in $project_name, skipping"
         return 2  # Return 2 to indicate "skipped, no changes"
     fi
