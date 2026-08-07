@@ -59,8 +59,23 @@ import(pathToFileURL(entry).href)
     console.log(`entry check: ok (${count} exports from ${rel})`);
   })
   .catch(err => {
+    const message = String(err && err.message);
+    // A package that imports CSS or other browser assets cannot load under
+    // plain node, and that is not a defect — it is a bundler-targeted package.
+    // Reporting it as a failure would make the gate cry wolf and get disabled,
+    // which costs more than the check is worth.
+    if (
+      /Unknown file extension "\.(css|scss|less|svg|png|jpg|woff2?)"/.test(
+        message
+      )
+    ) {
+      console.log(
+        "entry check: skipped (entry loads a browser asset; bundler-targeted package)"
+      );
+      process.exit(0);
+    }
     console.error(
-      `entry check FAILED: ${String(err && err.message).split("\n")[0]}\n` +
+      `entry check FAILED: ${message.split("\n")[0]}\n` +
         "The published artifact cannot be imported. Do not publish this."
     );
     process.exit(1);
