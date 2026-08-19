@@ -1,5 +1,10 @@
 # workflows - AI Development Guide
 
+> **Git policy — never auto-commit or auto-push.** Leave your work in the working tree.
+> Run `git commit`, `git push`, `gh pr create`, or `scripts/push_all.sh` **only when the user
+> explicitly asks in that turn**. Approval for an earlier change does not carry forward, and
+> finishing a task is not permission to commit it.
+
 ## Overview
 
 Shared GitHub Actions CI/CD workflows, localization scripts, and utility tooling for the entire 0xmail (Web3 Email) ecosystem. The centerpiece is a single reusable GitHub Actions workflow (`unified-cicd.yml`) that auto-detects deployment targets based on which secrets are configured in consuming repositories. The repository also provides LLM-powered and batch translation scripts for i18n, a multi-project push/release orchestration script, and SVG generation utilities.

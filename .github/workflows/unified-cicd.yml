@@ -43,6 +43,10 @@ on:
         description: "Docker image name (defaults to repo name, only used if Docker Hub secrets are set)"
         type: string
         default: ""
+      docker-platforms:
+        description: "Platforms to build. Narrow to linux/amd64 when a dependency ships no arm64 wheel, or the arm64 leg compiles it from source under emulation."
+        type: string
+        default: "linux/arm64,linux/amd64"
       python-version:
         description: "Python version to use (only for Python projects)"
         type: string
@@ -878,7 +882,7 @@ jobs:
         if: steps.check-secrets.outputs.configured == 'true' && steps.check-docker-version.outputs.version_exists != 'true'
         uses: docker/setup-buildx-action@v4
         with:
-          platforms: linux/arm64,linux/amd64
+          platforms: ${{ inputs.docker-platforms }}
 
       - name: "Login to Docker Hub"
         if: steps.check-secrets.outputs.configured == 'true' && steps.check-docker-version.outputs.version_exists != 'true'
@@ -905,7 +909,7 @@ jobs:
         with:
           context: .
           push: true
-          platforms: linux/arm64,linux/amd64
+          platforms: ${{ inputs.docker-platforms }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha

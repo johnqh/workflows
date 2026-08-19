@@ -642,17 +642,30 @@ read_package_scripts() {
 validate_python_project() {
     local project_dir="$1"
 
+    # Which directories actually hold Python. `src` was hardcoded, so a project
+    # laying its package out as `app/` (FastAPI's convention) failed with
+    # "E902 No such file or directory --> src" before a single rule ran — a
+    # lint failure that was really a missing path.
+    local py_paths=""
+    local py_src=""
+    for d in src app; do
+        [ -d "$project_dir/$d" ] && py_paths="$py_paths $d" && py_src="$py_src $d"
+    done
+    [ -d "$project_dir/tests" ] && py_paths="$py_paths tests"
+    py_paths="${py_paths# }"
+    py_src="${py_src# }"
+
     # Lint
-    if [ -f "$project_dir/pyproject.toml" ] && grep -q "ruff" "$project_dir/pyproject.toml" 2>/dev/null; then
+    if [ -f "$project_dir/pyproject.toml" ] && grep -q "ruff" "$project_dir/pyproject.toml" 2>/dev/null && [ -n "$py_paths" ]; then
         log_info "Running ruff check..."
-        if (cd "$project_dir" && ruff check src tests 2>/dev/null); then
+        if (cd "$project_dir" && ruff check $py_paths 2>/dev/null); then
             log_success "Ruff lint passed"
         else
             log_error "Ruff lint failed"
             return 1
         fi
         log_info "Running ruff format check..."
-        if (cd "$project_dir" && ruff format --check src tests 2>/dev/null); then
+        if (cd "$project_dir" && ruff format --check $py_paths 2>/dev/null); then
             log_success "Ruff format passed"
         else
             log_error "Ruff format failed"
@@ -663,7 +676,7 @@ validate_python_project() {
     # Typecheck
     if command -v mypy &> /dev/null; then
         log_info "Running mypy..."
-        if (cd "$project_dir" && mypy src 2>&1); then
+        if (cd "$project_dir" && mypy $py_src 2>&1); then
             log_success "Mypy passed"
         else
             log_error "Mypy failed"
