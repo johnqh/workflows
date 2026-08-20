@@ -349,3 +349,7 @@ All scoped under `@sudobility/` on npm:
 - Restricted: `di`, `mail_box_components`, `mail_box_configs`, `mail_box_contracts`, `mail_box_indexer_client`, `mail_box_lib`, `types`, `wildduck_client`
 - Web apps: `mail_box`
 - Docker apps: `mail_box_indexer`
+
+## Git Workflow
+
+- Do not use feature branches for code changes. Always stay on the current branch.
