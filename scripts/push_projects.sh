@@ -612,6 +612,7 @@ update_sudobility_deps() {
 _PKG_HAS_BUILD="no"
 _PKG_HAS_TEST="no"
 _PKG_HAS_UNIT_TEST="no"
+_PKG_HAS_TEST_RUN="no"
 _PKG_HAS_LINT="no"
 _PKG_HAS_TYPECHECK="no"
 
@@ -620,7 +621,7 @@ read_package_scripts() {
     local pkg_json="$1"
     if [ ! -f "$pkg_json" ]; then
         _PKG_HAS_BUILD="no"; _PKG_HAS_TEST="no"; _PKG_HAS_UNIT_TEST="no"
-        _PKG_HAS_LINT="no"; _PKG_HAS_TYPECHECK="no"
+        _PKG_HAS_TEST_RUN="no"; _PKG_HAS_LINT="no"; _PKG_HAS_TYPECHECK="no"
         return
     fi
     local result
@@ -630,12 +631,54 @@ read_package_scripts() {
             s.build ? 'yes' : 'no',
             (s['test:unit'] || s.test || s['test:run']) ? 'yes' : 'no',
             s['test:unit'] ? 'yes' : 'no',
+            s['test:run'] ? 'yes' : 'no',
             s.lint ? 'yes' : 'no',
             s.typecheck ? 'yes' : 'no'
         ];
         console.log(f.join(' '));
-    " 2>/dev/null) || result="no no no no no"
-    read -r _PKG_HAS_BUILD _PKG_HAS_TEST _PKG_HAS_UNIT_TEST _PKG_HAS_LINT _PKG_HAS_TYPECHECK <<< "$result"
+    " 2>/dev/null) || result="no no no no no no"
+    read -r _PKG_HAS_BUILD _PKG_HAS_TEST _PKG_HAS_UNIT_TEST _PKG_HAS_TEST_RUN _PKG_HAS_LINT _PKG_HAS_TYPECHECK <<< "$result"
+}
+
+# How many lines of a failed check's output to replay.
+CHECK_FAIL_LINES="${CHECK_FAIL_LINES:-80}"
+
+# Run one validation command with its output captured.  On success the output is
+# dropped so the log stays readable; on failure it is replayed.
+#
+# Every check used to run under `>/dev/null 2>&1`, so a failure printed nothing
+# but "Tests failed" and the only way to learn why was to re-run the command by
+# hand.  That friction is why red builds reached GitHub Actions instead of being
+# fixed here -- and CI minutes on a private repo are billed, a local run is not.
+run_check() {
+    local label="$1"
+    shift
+
+    local out status
+    out=$(mktemp)
+    status=0
+
+    "$@" >"$out" 2>&1 || status=$?
+
+    if [ "$status" -eq 0 ]; then
+        rm -f "$out"
+        log_success "$label passed"
+        return 0
+    fi
+
+    log_error "$label failed (exit $status)"
+    echo "--- last ${CHECK_FAIL_LINES} lines of $label output ---" >&2
+    tail -n "$CHECK_FAIL_LINES" "$out" >&2
+    echo "--- end of $label output ---" >&2
+    rm -f "$out"
+    return "$status"
+}
+
+# pm_run with CI=true set, so vitest/jest run once instead of entering watch mode.
+# Needs to be a function because run_check invokes "$@" directly and an
+# environment prefix cannot be passed through positional arguments.
+pm_run_ci() {
+    CI=true pm_run "$@"
 }
 
 # Run validation checks
@@ -656,43 +699,26 @@ validate_python_project() {
     py_src="${py_src# }"
 
     # Lint
+    #
+    # ruff ran under `2>/dev/null`, which discarded exactly the diagnostics
+    # needed to fix the failure it was reporting.
     if [ -f "$project_dir/pyproject.toml" ] && grep -q "ruff" "$project_dir/pyproject.toml" 2>/dev/null && [ -n "$py_paths" ]; then
         log_info "Running ruff check..."
-        if (cd "$project_dir" && ruff check $py_paths 2>/dev/null); then
-            log_success "Ruff lint passed"
-        else
-            log_error "Ruff lint failed"
-            return 1
-        fi
+        run_check "Ruff lint" bash -c "cd '$project_dir' && ruff check $py_paths" || return 1
         log_info "Running ruff format check..."
-        if (cd "$project_dir" && ruff format --check $py_paths 2>/dev/null); then
-            log_success "Ruff format passed"
-        else
-            log_error "Ruff format failed"
-            return 1
-        fi
+        run_check "Ruff format" bash -c "cd '$project_dir' && ruff format --check $py_paths" || return 1
     fi
 
     # Typecheck
     if command -v mypy &> /dev/null; then
         log_info "Running mypy..."
-        if (cd "$project_dir" && mypy $py_src 2>&1); then
-            log_success "Mypy passed"
-        else
-            log_error "Mypy failed"
-            return 1
-        fi
+        run_check "Mypy" bash -c "cd '$project_dir' && mypy $py_src" || return 1
     fi
 
     # Tests
     if command -v pytest &> /dev/null; then
         log_info "Running pytest..."
-        if (cd "$project_dir" && pytest -m "not integration" -q 2>&1); then
-            log_success "Tests passed"
-        else
-            log_error "Tests failed"
-            return 1
-        fi
+        run_check "Tests" bash -c "cd '$project_dir' && pytest -m 'not integration' -q" || return 1
     fi
 
     return 0
@@ -718,74 +744,57 @@ validate_project() {
     read_package_scripts "$pkg_json"
 
     # Typecheck
+    #
+    # These used to run as a bare command followed by `if [ $? -ne 0 ]`.  Under
+    # `set -e` that is a trap: a non-zero exit aborts the whole script before the
+    # test is ever evaluated, so the "return 1" path was unreachable in any
+    # context where errexit was still armed.  run_check keeps the failure local.
     if [ "$_PKG_HAS_TYPECHECK" = "yes" ]; then
         log_info "Running typecheck..."
-        pm_run typecheck 2>&1
-        if [ $? -ne 0 ]; then
-            log_error "Typecheck failed"
-            return 1
-        fi
-        log_success "Typecheck passed"
+        run_check "Typecheck" pm_run typecheck || return 1
     else
         if [ -f "$project_dir/tsconfig.json" ]; then
             log_info "Running tsc --noEmit..."
-            pm_exec tsc --noEmit 2>&1
-            if [ $? -ne 0 ]; then
-                log_error "TypeScript compilation failed"
-                return 1
-            fi
-            log_success "TypeScript check passed"
+            run_check "TypeScript check" pm_exec tsc --noEmit || return 1
         fi
     fi
 
     # Lint
     if [ "$_PKG_HAS_LINT" = "yes" ]; then
         log_info "Running lint..."
-        pm_run lint 2>&1
-        if [ $? -ne 0 ]; then
-            log_error "Lint failed"
-            return 1
-        fi
-        log_success "Lint passed"
+        run_check "Lint" pm_run lint || return 1
     fi
 
     # Tests
+    #
+    # Which script to run is decided from package.json rather than by trying
+    # `test:run` and treating its failure as "not present".  That old fallback
+    # could not tell a missing script from a genuinely failing one, so a real
+    # test failure was silently retried as `test` and could report the wrong
+    # result -- and it ran the suite twice when test:run was absent.
     if [ "$_PKG_HAS_TEST" = "yes" ]; then
         if [ "$_PKG_HAS_UNIT_TEST" = "yes" ]; then
             log_info "Running unit tests (test:unit)..."
-            if pm_run test:unit >/dev/null 2>&1; then
-                log_success "Unit tests passed"
-            else
-                log_error "Unit tests failed"
-                return 1
-            fi
+            run_check "Unit tests" pm_run test:unit || return 1
+        elif [ "$_PKG_HAS_TEST_RUN" = "yes" ]; then
+            log_info "Running tests (test:run)..."
+            run_check "Tests" pm_run test:run || return 1
         else
+            # CI=true disables vitest/jest watch mode.  We avoid passing extra
+            # flags (--run, --ci) because bun can misinterpret
+            # "bun run test --run" as its native test runner.
             log_info "Running tests..."
-            # Try test:run first (explicit single-run script), then fall back to
-            # CI=true pm_run test.  CI=true disables vitest/jest watch mode.
-            # We avoid passing extra flags (--run, --ci) because bun can
-            # misinterpret "bun run test --run" as its native test runner.
-            if pm_run test:run >/dev/null 2>&1; then
-                log_success "Tests passed"
-            elif CI=true pm_run test >/dev/null 2>&1; then
-                log_success "Tests passed"
-            else
-                log_error "Tests failed"
-                return 1
-            fi
+            run_check "Tests" pm_run_ci test || return 1
         fi
     fi
 
     # Build
+    #
+    # The failure path used to re-run the entire build just to show its output,
+    # doubling the cost of the slowest check in the script.
     if [ "$_PKG_HAS_BUILD" = "yes" ]; then
         log_info "Running build..."
-        if pm_run build >/dev/null 2>&1; then
-            log_success "Build passed"
-        else
-            log_error "Build failed"
-            pm_run build 2>&1 | tail -50
-            return 1
-        fi
+        run_check "Build" pm_run build || return 1
     fi
 
     return 0
@@ -809,22 +818,13 @@ validate_subpackage() {
     if [ "$_PKG_HAS_TEST" = "yes" ]; then
         if [ "$_PKG_HAS_UNIT_TEST" = "yes" ]; then
             log_info "    Running unit tests (test:unit)..."
-            if pm_run test:unit >/dev/null 2>&1; then
-                log_success "    Unit tests passed"
-            else
-                log_error "    Unit tests failed for $package_name"
-                return 1
-            fi
+            run_check "Unit tests ($package_name)" pm_run test:unit || return 1
+        elif [ "$_PKG_HAS_TEST_RUN" = "yes" ]; then
+            log_info "    Running tests (test:run)..."
+            run_check "Tests ($package_name)" pm_run test:run || return 1
         else
             log_info "    Running tests..."
-            if pm_run test:run >/dev/null 2>&1; then
-                log_success "    Tests passed"
-            elif CI=true pm_run test >/dev/null 2>&1; then
-                log_success "    Tests passed"
-            else
-                log_error "    Tests failed for $package_name"
-                return 1
-            fi
+            run_check "Tests ($package_name)" pm_run_ci test || return 1
         fi
     else
         log_info "    No test script found, skipping tests"
@@ -832,13 +832,7 @@ validate_subpackage() {
 
     if [ "$_PKG_HAS_BUILD" = "yes" ]; then
         log_info "    Running build..."
-        if pm_run build >/dev/null 2>&1; then
-            log_success "    Build passed"
-        else
-            log_error "    Build failed for $package_name"
-            pm_run build 2>&1 | tail -30
-            return 1
-        fi
+        run_check "Build ($package_name)" pm_run build || return 1
     fi
 
     return 0
