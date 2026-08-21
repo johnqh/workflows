@@ -1555,6 +1555,14 @@ run_push_projects() {
     local current_project=0
     local found_starting_project=false
     local changes_counter=0  # Counter for projects with changes
+    # "name@version" for each project that has actually published since the
+    # last wait. Kept separately from changes_counter because the two answer
+    # different questions: the counter says something happened, this says what
+    # is in flight on npm. A wait must poll for *these*, never for the project
+    # it happens to be standing on — that one may have been skipped, in which
+    # case its version is already served and the poll returns instantly,
+    # granting no wait at all to whichever project really did publish.
+    local pending_published_ids=()
 
     # If no starting project specified, consider it "found" immediately
     if [ -z "$STARTING_PROJECT" ]; then
@@ -1612,32 +1620,34 @@ run_push_projects() {
         elif [ "$process_result" -eq 0 ]; then
             # Project had changes and was committed
             changes_counter=$((changes_counter + 1))
+            # Recorded here, at the moment it publishes, rather than read back
+            # at the wait — by then the loop has moved on to another project.
+            local just_published
+            just_published=$(published_package_id "$abs_path")
+            if [ -n "$just_published" ]; then
+                pending_published_ids+=("$just_published")
+            fi
         fi
         # process_result=2 means skipped (no changes), counter stays the same
 
         if [ "$wait_time" -gt 0 ]; then
-            if [ "$changes_counter" -gt 0 ]; then
-                # The id of the project just processed. When several published
-                # since the last wait (the ones configured with a 0 wait), this
-                # is the most recent of them — and therefore the strongest
-                # signal, since the earlier ones have had strictly longer to
-                # propagate.
+            if [ "${#pending_published_ids[@]}" -gt 0 ]; then
+                # The configured wait is treated as a floor on the cap, not as
+                # the duration: a project that asked for 150s clearly expects a
+                # slow publish, but the poll should still be allowed to outlast
+                # it rather than give up at the number somebody guessed.
+                local poll_cap="$NPM_PUBLISH_POLL_MAX"
+                [ "$wait_time" -gt "$poll_cap" ] && poll_cap="$wait_time"
+
+                # Every publish still in flight, not just the most recent —
+                # several projects can publish between two waits when the ones
+                # in between are configured with a 0 wait. Each poll after the
+                # first is usually instant, since they were published earlier.
                 local published_id
-                published_id=$(published_package_id "$abs_path")
-
-                if [ -n "$published_id" ]; then
-                    # The configured wait is treated as a floor on the cap, not
-                    # as the duration: a project that asked for 150s clearly
-                    # expects a slow publish, but the poll should still be
-                    # allowed to outlast it rather than give up at the number
-                    # somebody guessed.
-                    local poll_cap="$NPM_PUBLISH_POLL_MAX"
-                    [ "$wait_time" -gt "$poll_cap" ] && poll_cap="$wait_time"
-
+                for published_id in "${pending_published_ids[@]}"; do
                     log_info "Waiting for npm to serve $published_id (cap ${poll_cap}s)..."
                     if wait_for_npm_publish "$published_id" "$poll_cap"; then
                         log_success "npm is serving $published_id"
-                        invalidate_packument_cache
                     else
                         # Loud, because the consequence is a downstream project
                         # silently building against the previous version.
@@ -1645,14 +1655,20 @@ run_push_projects() {
                         log_error "Downstream projects will resolve the PREVIOUS version — check CI for the publish job"
                         log_error "Re-run with --starting-project <next project> once the publish lands"
                     fi
-                else
-                    # Nothing published to npm (private or non-npm project);
-                    # there is no registry answer to poll for.
-                    log_info "Waiting $wait_time seconds ($changes_counter project(s) processed, none published to npm)..."
-                    sleep "$wait_time"
-                fi
+                done
 
-                changes_counter=0  # Reset counter after waiting
+                # Once, after the whole set: the cache only has to be dropped
+                # before the next project resolves its dependencies.
+                invalidate_packument_cache
+
+                pending_published_ids=()
+                changes_counter=0
+            elif [ "$changes_counter" -gt 0 ]; then
+                # Something was processed, but nothing reached npm — a private
+                # package, or a project that publishes no package at all. There
+                # is no registry answer to wait for, so waiting is pure delay.
+                log_info "$changes_counter project(s) processed, none published to npm — no wait needed"
+                changes_counter=0
             else
                 log_info "No changes published, skipping wait"
             fi
