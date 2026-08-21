@@ -1,6 +1,6 @@
 #!/bin/bash
 
-PUSH_PROJECTS_VERSION="1.1.0"
+PUSH_PROJECTS_VERSION="1.2.0"
 
 # push_projects.sh - Reusable script to update, validate, version bump, and push projects
 #
@@ -26,6 +26,18 @@ PUSH_PROJECTS_VERSION="1.1.0"
 #   --help, -h               Show help message
 #   --starting-project       Skip projects until reaching the specified project name
 #   --continue-on-error, -c  Log failures and continue to the next project
+#
+# Environment:
+#   NPM_PUBLISH_POLL_MAX       Seconds to wait for a publish to appear on npm
+#                              (default 600). A ceiling, not a duration.
+#   NPM_PUBLISH_POLL_INTERVAL  Seconds between registry checks (default 5).
+#
+# Note on "wait_after_seconds": since v1.2.0 this is no longer how long the
+# script sleeps. After a project publishes, the script polls npm for the exact
+# version it just pushed and continues the moment it is served — usually within
+# seconds. The configured number now only raises the poll's cap when it exceeds
+# NPM_PUBLISH_POLL_MAX, and is still used as a plain sleep for projects that
+# publish nothing to npm (private or non-npm).
 
 set -e  # Exit on error
 set -u  # Exit on undefined variable
@@ -425,6 +437,107 @@ fetch_latest_versions_parallel() {
     done
 
     rm -rf "$tmpdir"
+}
+
+# ---------------------------------------------------------------------------
+# Waiting for a publish to actually land
+#
+# Publishing happens in CI on push, not in this script, so a project that has
+# just been pushed is not yet installable. Every downstream project then
+# resolves its dependencies from npm, and if the publish has not landed, npm
+# answers with the *previous* version and this script cheerfully reports
+# "already at latest version".
+#
+# That failure is silent whenever the downstream project does not reference a
+# newly added export: everything typechecks, tests pass, and a release ships
+# built against the library it was supposed to replace. (When it *does*
+# reference one, it fails typecheck instead, which is the lucky case.)
+#
+# This used to be a fixed `sleep`, which cannot be right: too short and it
+# ships staleness, too long and every run pays for the worst case. 60s lost the
+# race, and so did 150s. So the wait is now a poll — ask npm for the exact
+# version we just pushed until it answers, which returns in seconds when CI is
+# quick and holds on when it is slow.
+# ---------------------------------------------------------------------------
+
+# How long a poll may run before giving up, in seconds. A ceiling, not a
+# duration: a fast publish returns almost immediately.
+NPM_PUBLISH_POLL_MAX="${NPM_PUBLISH_POLL_MAX:-600}"
+NPM_PUBLISH_POLL_INTERVAL="${NPM_PUBLISH_POLL_INTERVAL:-5}"
+
+# "name@version" for what a project just published, or empty if it publishes
+# nothing to npm — a private package (music_api), a python project, or
+# anything without a package.json. Those keep the old fixed sleep, since there
+# is no registry answer to wait for.
+published_package_id() {
+    local project_dir="$1"
+    local pkg_json="$project_dir/package.json"
+
+    [ -f "$pkg_json" ] || return 0
+
+    node -e "
+        try {
+            const pkg = require('$pkg_json');
+            if (pkg.private) process.exit(0);
+            if (!pkg.name || !pkg.version) process.exit(0);
+            console.log(pkg.name + '@' + pkg.version);
+        } catch (e) {
+            process.exit(0);
+        }
+    " 2>/dev/null
+}
+
+# Blocks until npm serves exactly "$1" (a "name@version"), or the cap expires.
+# Returns 0 when the version is live, 1 on timeout.
+wait_for_npm_publish() {
+    local package_id="$1"
+    local max_wait="$2"
+
+    # Scoped names start with '@', so strip from the *last* '@' only:
+    # "@sudobility/music_lib@1.7.49" -> name "@sudobility/music_lib", ver "1.7.49"
+    local name="${package_id%@*}"
+    local version="${package_id##*@}"
+
+    local waited=0
+    local checked_reachable=false
+
+    while [ "$waited" -lt "$max_wait" ]; do
+        if [ "$(npm view "${name}@${version}" version 2>/dev/null)" = "$version" ]; then
+            [ "$waited" -gt 0 ] && log_info "npm served $package_id after ${waited}s"
+            return 0
+        fi
+
+        # A miss means "not published yet" — or that we cannot read the
+        # registry at all, which looks identical and would otherwise burn the
+        # whole cap before saying so. A project-local .npmrc referencing an
+        # unset ${NPM_TOKEN} is the usual cause. Checked once, on the first
+        # miss, since a reachable registry stays reachable.
+        if [ "$checked_reachable" = false ]; then
+            checked_reachable=true
+            if ! npm view "$name" version >/dev/null 2>&1; then
+                log_error "Cannot read $name from npm at all — this is not publish lag"
+                log_error "Check registry auth (a project .npmrc may reference an unset \${NPM_TOKEN})"
+                return 1
+            fi
+        fi
+
+        sleep "$NPM_PUBLISH_POLL_INTERVAL"
+        waited=$((waited + NPM_PUBLISH_POLL_INTERVAL))
+    done
+
+    return 1
+}
+
+# npm serving a version is necessary but not sufficient: bun caches the
+# packument, so `bun add pkg@^new` can still fail to resolve a version that
+# `npm view` and curl both show. Dropping the cache is what makes the freshly
+# published version resolvable to the next project in the list.
+invalidate_packument_cache() {
+    case "$PKG_MANAGER" in
+        bun) bun pm cache rm >/dev/null 2>&1 || true ;;
+        pnpm) pnpm store prune >/dev/null 2>&1 || true ;;
+        npm|yarn) npm cache clean --force >/dev/null 2>&1 || true ;;
+    esac
 }
 
 # Update @sudobility dependencies to latest versions
@@ -1504,8 +1617,41 @@ run_push_projects() {
 
         if [ "$wait_time" -gt 0 ]; then
             if [ "$changes_counter" -gt 0 ]; then
-                log_info "Waiting $wait_time seconds for npm registry to update ($changes_counter project(s) published)..."
-                sleep "$wait_time"
+                # The id of the project just processed. When several published
+                # since the last wait (the ones configured with a 0 wait), this
+                # is the most recent of them — and therefore the strongest
+                # signal, since the earlier ones have had strictly longer to
+                # propagate.
+                local published_id
+                published_id=$(published_package_id "$abs_path")
+
+                if [ -n "$published_id" ]; then
+                    # The configured wait is treated as a floor on the cap, not
+                    # as the duration: a project that asked for 150s clearly
+                    # expects a slow publish, but the poll should still be
+                    # allowed to outlast it rather than give up at the number
+                    # somebody guessed.
+                    local poll_cap="$NPM_PUBLISH_POLL_MAX"
+                    [ "$wait_time" -gt "$poll_cap" ] && poll_cap="$wait_time"
+
+                    log_info "Waiting for npm to serve $published_id (cap ${poll_cap}s)..."
+                    if wait_for_npm_publish "$published_id" "$poll_cap"; then
+                        log_success "npm is serving $published_id"
+                        invalidate_packument_cache
+                    else
+                        # Loud, because the consequence is a downstream project
+                        # silently building against the previous version.
+                        log_error "npm did not serve $published_id within ${poll_cap}s"
+                        log_error "Downstream projects will resolve the PREVIOUS version — check CI for the publish job"
+                        log_error "Re-run with --starting-project <next project> once the publish lands"
+                    fi
+                else
+                    # Nothing published to npm (private or non-npm project);
+                    # there is no registry answer to poll for.
+                    log_info "Waiting $wait_time seconds ($changes_counter project(s) processed, none published to npm)..."
+                    sleep "$wait_time"
+                fi
+
                 changes_counter=0  # Reset counter after waiting
             else
                 log_info "No changes published, skipping wait"
