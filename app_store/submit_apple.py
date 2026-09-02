@@ -356,7 +356,7 @@ def action_submit(args):
 
     # Determine which platforms are needed from info.json
     info_path = os.path.join(args.app_store_dir, "info.json")
-    needed_platforms = {"IOS"}  # Always create iOS version
+    needed_platforms = set()
     if os.path.isfile(info_path):
         with open(info_path) as f:
             info = json.load(f)
@@ -365,6 +365,13 @@ def action_submit(args):
         for key in configured_platforms:
             if key in PLATFORM_MAP:
                 needed_platforms.add(PLATFORM_MAP[key])
+
+    # A project that declares its platforms gets exactly those. Creating an iOS
+    # version unconditionally put a spurious IOS appStoreVersion on Mac-only
+    # apps, and "IOS" sorts first, so it failed before any metadata uploaded.
+    # Projects that declare no platforms keep the old iOS default.
+    if not needed_platforms:
+        needed_platforms = {"IOS"}
 
     # Create versions for each platform
     version_ids = {}
