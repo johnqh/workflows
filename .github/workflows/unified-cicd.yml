@@ -551,9 +551,11 @@ jobs:
           echo "Package: $PACKAGE_NAME"
           echo "Current version: $CURRENT_VERSION"
 
-          # Get published version from NPM registry (requires auth for scoped packages)
-          PUBLISHED_VERSION=$(npm view "$PACKAGE_NAME" version 2>/dev/null || echo "0.0.0")
-          echo "Published version on NPM: $PUBLISHED_VERSION"
+          # Ask for this exact version rather than the latest dist-tag: a
+          # republish of an older version is just as forbidden as a republish
+          # of the newest one.
+          PUBLISHED_VERSION=$(npm view "$PACKAGE_NAME@$CURRENT_VERSION" version 2>/dev/null || echo "")
+          echo "Published version on NPM: ${PUBLISHED_VERSION:-none}"
 
           if [ "$CURRENT_VERSION" == "$PUBLISHED_VERSION" ]; then
             echo "version_exists=true" >> $GITHUB_OUTPUT
@@ -622,14 +624,32 @@ jobs:
       - name: "Publish to NPM"
         if: steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true'
         run: |
-          if [ "${{ inputs.npm-access }}" = "public" ]; then
-            echo "📦 Publishing as public package"
-            npm publish --access public
+          if [ "$NPM_ACCESS" = "public" ]; then
+            ACCESS="public"
           else
-            echo "📦 Publishing as restricted package"
-            npm publish --access restricted
+            ACCESS="restricted"
+          fi
+          echo "📦 Publishing as $ACCESS package"
+
+          # The pre-check can miss a version published moments earlier: the
+          # registry read path is CDN-cached, so a just-published version stays
+          # invisible to `npm view` for up to a minute. Losing that race means
+          # the version is already on NPM — which is the outcome we wanted.
+          set +e
+          PUBLISH_OUTPUT=$(npm publish --access "$ACCESS" 2>&1)
+          PUBLISH_STATUS=$?
+          set -e
+          echo "$PUBLISH_OUTPUT"
+
+          if [ $PUBLISH_STATUS -ne 0 ]; then
+            if echo "$PUBLISH_OUTPUT" | grep -qi "cannot publish over the previously published version"; then
+              echo "ℹ️  Version already on NPM — published outside this run, nothing to do"
+              exit 0
+            fi
+            exit $PUBLISH_STATUS
           fi
         env:
+          NPM_ACCESS: ${{ inputs.npm-access }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
