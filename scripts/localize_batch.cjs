@@ -262,6 +262,21 @@ function buildTargetObject(source, existing, newTranslations, lang, prefix = '')
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+/**
+ * A 5xx caused by unparseable LLM output is deterministic for a given payload:
+ * the service replies with the identical body every time, so resending it can
+ * never succeed. Splitting the language set changes the payload, and the halves
+ * normally translate fine. Matched narrowly on purpose — an auth or transport
+ * failure from the LLM backend is not payload-dependent, so it should fall
+ * through to the plain backoff retry below instead of fanning out calls.
+ */
+function isUnparseableLlmOutput(message) {
+  return (
+    /HTTP 5\d\d/.test(message) &&
+    /JSON Parse error|Unexpected token|invalid JSON|Expected '[}\]]'/i.test(message)
+  );
+}
+
 async function translateBatch(strings, targetLangs, retryCount = 0) {
   const maxRetries = 3;
   try {
@@ -303,6 +318,20 @@ async function translateBatch(strings, targetLangs, retryCount = 0) {
 
     return data.data.translations;
   } catch (error) {
+    // Split before burning retries on a payload that will fail identically.
+    const splittable = targetLangs.length > 1;
+    if (splittable && (isUnparseableLlmOutput(error.message) || retryCount >= maxRetries)) {
+      const mid = Math.ceil(targetLangs.length / 2);
+      const left = targetLangs.slice(0, mid);
+      const right = targetLangs.slice(mid);
+      console.warn(
+        `  API error: ${error.message}.\n  Splitting languages into [${left.join(', ')}] + [${right.join(', ')}] and retrying...`
+      );
+      const leftResult = await translateBatch(strings, left);
+      const rightResult = await translateBatch(strings, right);
+      return { ...leftResult, ...rightResult };
+    }
+
     if (retryCount < maxRetries) {
       const waitSec = (retryCount + 1) * 3;
       console.warn(
