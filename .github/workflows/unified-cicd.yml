@@ -245,8 +245,36 @@ jobs:
           fi
 
       # ---- Node.js project steps ----
+      # Setup Bun downloads the Bun zip from GitHub Releases, which sometimes
+      # answers 504 for a minute or two. setup-bun retries internally, but only
+      # within a few seconds, so a longer outage failed the whole job. Try up to
+      # three times, spaced out, and fail only if the last attempt fails.
       - name: "Setup Bun"
+        id: setup-bun-1
         if: steps.detect-pm.outputs.manager == 'bun'
+        continue-on-error: true
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ inputs.bun-version }}
+
+      - name: "Wait before retrying Setup Bun"
+        if: steps.detect-pm.outputs.manager == 'bun' && steps.setup-bun-1.outcome == 'failure'
+        run: sleep 30
+
+      - name: "Setup Bun (retry 1)"
+        id: setup-bun-2
+        if: steps.detect-pm.outputs.manager == 'bun' && steps.setup-bun-1.outcome == 'failure'
+        continue-on-error: true
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ inputs.bun-version }}
+
+      - name: "Wait before retrying Setup Bun again"
+        if: steps.detect-pm.outputs.manager == 'bun' && steps.setup-bun-2.outcome == 'failure'
+        run: sleep 60
+
+      - name: "Setup Bun (retry 2)"
+        if: steps.detect-pm.outputs.manager == 'bun' && steps.setup-bun-2.outcome == 'failure'
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ inputs.bun-version }}
@@ -528,8 +556,34 @@ jobs:
             echo "📦 Detected npm project"
           fi
 
+      # Retried like the test job's Setup Bun: GitHub Releases sometimes answers
+      # 504 for longer than setup-bun's own quick retries last.
       - name: "Setup Bun"
+        id: setup-bun-1
         if: steps.check-secrets.outputs.configured == 'true' && steps.detect-pm.outputs.manager == 'bun'
+        continue-on-error: true
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ inputs.bun-version }}
+
+      - name: "Wait before retrying Setup Bun"
+        if: steps.check-secrets.outputs.configured == 'true' && steps.detect-pm.outputs.manager == 'bun' && steps.setup-bun-1.outcome == 'failure'
+        run: sleep 30
+
+      - name: "Setup Bun (retry 1)"
+        id: setup-bun-2
+        if: steps.check-secrets.outputs.configured == 'true' && steps.detect-pm.outputs.manager == 'bun' && steps.setup-bun-1.outcome == 'failure'
+        continue-on-error: true
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ inputs.bun-version }}
+
+      - name: "Wait before retrying Setup Bun again"
+        if: steps.check-secrets.outputs.configured == 'true' && steps.detect-pm.outputs.manager == 'bun' && steps.setup-bun-2.outcome == 'failure'
+        run: sleep 60
+
+      - name: "Setup Bun (retry 2)"
+        if: steps.check-secrets.outputs.configured == 'true' && steps.detect-pm.outputs.manager == 'bun' && steps.setup-bun-2.outcome == 'failure'
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ inputs.bun-version }}

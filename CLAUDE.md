@@ -329,7 +329,7 @@ Use a tag instead of `@main`: `uses: johnqh/workflows/.github/workflows/unified-
 |---|---|---|
 | `actions/checkout` | v4 | Repository checkout |
 | `actions/setup-node` | v4 | Node.js setup |
-| `oven-sh/setup-bun` | v2 | Bun runtime setup |
+| `oven-sh/setup-bun` | v2 | Bun runtime setup; each use is retried up to 3 times (30s, then 60s apart) because GitHub Releases downloads intermittently return 504 |
 | `docker/setup-qemu-action` | v3 | QEMU for multi-arch builds |
 | `docker/setup-buildx-action` | v3 | Docker Buildx |
 | `docker/login-action` | v3 | Docker Hub auth |
