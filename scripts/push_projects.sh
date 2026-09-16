@@ -742,7 +742,7 @@ read_package_scripts() {
         const s = require('$pkg_json').scripts || {};
         const f = [
             s.build ? 'yes' : 'no',
-            (s['test:unit'] || s.test || s['test:run']) ? 'yes' : 'no',
+            s['test:unit'] ? 'yes' : 'no',
             s['test:unit'] ? 'yes' : 'no',
             s['test:run'] ? 'yes' : 'no',
             s.lint ? 'yes' : 'no',
@@ -885,20 +885,9 @@ validate_project() {
     # could not tell a missing script from a genuinely failing one, so a real
     # test failure was silently retried as `test` and could report the wrong
     # result -- and it ran the suite twice when test:run was absent.
-    if [ "$_PKG_HAS_TEST" = "yes" ]; then
-        if [ "$_PKG_HAS_UNIT_TEST" = "yes" ]; then
-            log_info "Running unit tests (test:unit)..."
-            run_check "Unit tests" pm_run test:unit || return 1
-        elif [ "$_PKG_HAS_TEST_RUN" = "yes" ]; then
-            log_info "Running tests (test:run)..."
-            run_check "Tests" pm_run test:run || return 1
-        else
-            # CI=true disables vitest/jest watch mode.  We avoid passing extra
-            # flags (--run, --ci) because bun can misinterpret
-            # "bun run test --run" as its native test runner.
-            log_info "Running tests..."
-            run_check "Tests" pm_run_ci test || return 1
-        fi
+    if [ "$_PKG_HAS_UNIT_TEST" = "yes" ]; then
+        log_info "Running unit tests (test:unit)..."
+        run_check "Unit tests" pm_run test:unit || return 1
     fi
 
     # Build
@@ -928,17 +917,9 @@ validate_subpackage() {
 
     read_package_scripts "$pkg_json"
 
-    if [ "$_PKG_HAS_TEST" = "yes" ]; then
-        if [ "$_PKG_HAS_UNIT_TEST" = "yes" ]; then
-            log_info "    Running unit tests (test:unit)..."
-            run_check "Unit tests ($package_name)" pm_run test:unit || return 1
-        elif [ "$_PKG_HAS_TEST_RUN" = "yes" ]; then
-            log_info "    Running tests (test:run)..."
-            run_check "Tests ($package_name)" pm_run test:run || return 1
-        else
-            log_info "    Running tests..."
-            run_check "Tests ($package_name)" pm_run_ci test || return 1
-        fi
+    if [ "$_PKG_HAS_UNIT_TEST" = "yes" ]; then
+        log_info "    Running unit tests (test:unit)..."
+        run_check "Unit tests ($package_name)" pm_run test:unit || return 1
     else
         log_info "    No test script found, skipping tests"
     fi
