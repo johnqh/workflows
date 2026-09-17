@@ -1,6 +1,6 @@
 #!/bin/bash
 
-PUSH_PROJECTS_VERSION="1.3.1"
+PUSH_PROJECTS_VERSION="1.3.2"
 
 # push_projects.sh - Reusable script to update, validate, version bump, and push projects
 #
@@ -1431,7 +1431,12 @@ commit_and_push() {
     if [ "$needs_commit" = true ]; then
         log_info "Committing changes..."
 
-        git add -A
+        local add_output
+        if ! add_output=$(run_with_timeout "$GIT_OPERATION_TIMEOUT" git add -A 2>&1); then
+            echo "$add_output"
+            log_error "Failed to stage changes (timed out or exited unsuccessfully)"
+            return 1
+        fi
 
         local version=$(bun -e "console.log(require('./package.json').version)" 2>/dev/null || echo "unknown")
 
@@ -1439,6 +1444,7 @@ commit_and_push() {
 
         # Try AI-generated commit message first, fall back to heuristic
         if [ "$AI_COMMIT" = true ]; then
+            log_info "Generating commit message with $AI_COMMIT_PROVIDER..."
             if [ "$AI_COMMIT_PROVIDER" = "codex" ]; then
                 commit_msg=$(generate_codex_commit_message "$version" "$project_name" 2>/dev/null) || true
             else
@@ -1447,9 +1453,11 @@ commit_and_push() {
         fi
 
         if [ -z "$commit_msg" ]; then
+            log_info "Using heuristic commit message"
             commit_msg=$(analyze_changes "$version" "$FORCE_MODE")
         fi
 
+        log_info "Creating git commit..."
         local commit_output
         if commit_output=$(run_with_timeout "$GIT_OPERATION_TIMEOUT" git commit -m "$commit_msg" 2>&1); then
             log_success "Changes committed"
