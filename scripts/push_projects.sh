@@ -48,6 +48,7 @@ export GIT_PAGER=cat
 # Authentication failures should be reported so the project is not mistaken
 # for successfully published.
 export GIT_TERMINAL_PROMPT=0
+export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=30"
 
 # Colors for output
 RED='\033[0;31m'
@@ -108,12 +109,31 @@ detect_package_manager() {
     log_info "Detected package manager: $PKG_MANAGER (lockfile: $PKG_LOCKFILE)"
 }
 
+# Terminate a process and any descendants it spawned. This matters for AI
+# CLIs and git hooks: killing only the parent can leave a child holding the
+# command-substitution pipe open forever.
+kill_process_tree() {
+    local pid="$1"
+    local child
+
+    for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+        kill_process_tree "$child"
+    done
+
+    kill "$pid" 2>/dev/null || true
+}
+
 # Run a command with a timeout (in seconds). Returns 143 on timeout.
 run_with_timeout() {
     local seconds=$1; shift
     "$@" &
     local pid=$!
-    ( sleep "$seconds" && kill "$pid" 2>/dev/null ) &
+    (
+        sleep "$seconds"
+        if kill -0 "$pid" 2>/dev/null; then
+            kill_process_tree "$pid"
+        fi
+    ) &
     local watchdog=$!
     local exit_code=0
     wait "$pid" || exit_code=$?
