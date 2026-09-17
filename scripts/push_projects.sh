@@ -1,6 +1,6 @@
 #!/bin/bash
 
-PUSH_PROJECTS_VERSION="1.3.2"
+PUSH_PROJECTS_VERSION="1.3.3"
 
 # push_projects.sh - Reusable script to update, validate, version bump, and push projects
 #
@@ -1431,14 +1431,15 @@ commit_and_push() {
     if [ "$needs_commit" = true ]; then
         log_info "Committing changes..."
 
-        local add_output
-        if ! add_output=$(run_with_timeout "$GIT_OPERATION_TIMEOUT" git add -A 2>&1); then
-            echo "$add_output"
+        log_info "Staging changes..."
+        if ! run_with_timeout "$GIT_OPERATION_TIMEOUT" git add -A; then
             log_error "Failed to stage changes (timed out or exited unsuccessfully)"
             return 1
         fi
+        log_success "Changes staged"
 
         local version=$(bun -e "console.log(require('./package.json').version)" 2>/dev/null || echo "unknown")
+        log_info "Preparing commit for version $version..."
 
         local commit_msg
 
