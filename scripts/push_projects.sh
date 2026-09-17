@@ -1458,6 +1458,10 @@ commit_and_push() {
             commit_msg=$(analyze_changes "$version" "$FORCE_MODE")
         fi
 
+        log_info "Generated commit message (provider: $AI_COMMIT_PROVIDER):"
+        printf '%s\n' "----- BEGIN COMMIT MESSAGE -----"
+        printf '%s\n' "$commit_msg"
+        printf '%s\n' "----- END COMMIT MESSAGE -----"
         log_info "Creating git commit..."
         local commit_output
         # This is an unattended release commit. Skip repository hooks and
