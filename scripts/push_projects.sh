@@ -1,6 +1,6 @@
 #!/bin/bash
 
-PUSH_PROJECTS_VERSION="1.3.4"
+PUSH_PROJECTS_VERSION="1.4.0"
 
 # push_projects.sh - Reusable script to update, validate, version bump, and push projects
 #
@@ -565,6 +565,36 @@ wait_for_npm_publish() {
     done
 
     return 1
+}
+
+# Poll a batch concurrently. Waiting serially makes three packages each take
+# up to the full cap, even though they were all pushed before the next project
+# needs them. One batch now costs at most one polling cap.
+wait_for_pending_npm_publishes() {
+    local max_wait="$1"
+    shift
+    local package_id
+    local -a pids=()
+    local all_ok=true
+
+    for package_id in "$@"; do
+        log_info "Waiting for npm to serve $package_id (cap ${max_wait}s)..."
+        wait_for_npm_publish "$package_id" "$max_wait" &
+        pids+=("$!")
+    done
+
+    local pid
+    for pid in "${pids[@]}"; do
+        if wait "$pid"; then
+            log_success "npm is serving the associated package"
+        else
+            all_ok=false
+            log_error "npm did not serve one of the pending packages within ${max_wait}s"
+            log_error "Downstream projects may resolve the PREVIOUS version — check CI for the publish job"
+        fi
+    done
+
+    [ "$all_ok" = true ]
 }
 
 # npm serving a version is necessary but not sufficient: bun caches the
@@ -1779,21 +1809,10 @@ run_push_projects() {
 
                 # Every publish still in flight, not just the most recent —
                 # several projects can publish between two waits when the ones
-                # in between are configured with a 0 wait. Each poll after the
-                # first is usually instant, since they were published earlier.
-                local published_id
-                for published_id in "${pending_published_ids[@]}"; do
-                    log_info "Waiting for npm to serve $published_id (cap ${poll_cap}s)..."
-                    if wait_for_npm_publish "$published_id" "$poll_cap"; then
-                        log_success "npm is serving $published_id"
-                    else
-                        # Loud, because the consequence is a downstream project
-                        # silently building against the previous version.
-                        log_error "npm did not serve $published_id within ${poll_cap}s"
-                        log_error "Downstream projects will resolve the PREVIOUS version — check CI for the publish job"
-                        log_error "Re-run with --starting-project <next project> once the publish lands"
-                    fi
-                done
+                # in between are configured with a 0 wait. Poll the whole batch
+                # concurrently so this boundary costs one cap, not one cap per
+                # package.
+                wait_for_pending_npm_publishes "$poll_cap" "${pending_published_ids[@]}" || true
 
                 # Once, after the whole set: the cache only has to be dropped
                 # before the next project resolves its dependencies.
@@ -1812,6 +1831,15 @@ run_push_projects() {
             fi
         fi
     done
+
+    # A list may end with zero-delay projects. There is no later non-zero
+    # boundary to trigger their batch, so flush it once before reporting done.
+    if [ "${#pending_published_ids[@]}" -gt 0 ]; then
+        log_info "Final npm publication batch: checking ${#pending_published_ids[@]} package(s)..."
+        wait_for_pending_npm_publishes "$NPM_PUBLISH_POLL_MAX" "${pending_published_ids[@]}" || true
+        invalidate_packument_cache
+        pending_published_ids=()
+    fi
 
     # Check if starting project was found (if specified)
     if [ -n "$STARTING_PROJECT" ] && [ "$found_starting_project" = false ]; then
