@@ -1,6 +1,6 @@
 #!/bin/bash
 
-PUSH_PROJECTS_VERSION="1.2.0"
+PUSH_PROJECTS_VERSION="1.3.0"
 
 # push_projects.sh - Reusable script to update, validate, version bump, and push projects
 #
@@ -255,8 +255,18 @@ pm_exec() {
 pm_version_bump() {
     case "$PKG_MANAGER" in
         bun)
-            # Bun doesn't have version command, use npm
-            npm version patch --no-git-tag-version
+            # Bun's version command creates a git tag, while this workflow
+            # creates the commit and tag policy itself. Update package.json
+            # directly through Bun instead.
+            local current_version major minor patch next_version
+            current_version=$(bun pm pkg get version | tr -d '"') || return 1
+            IFS='.' read -r major minor patch <<< "$current_version"
+            if [ -z "$major" ] || [ -z "$minor" ] || [ -z "$patch" ]; then
+                log_error "Cannot parse package version: $current_version"
+                return 1
+            fi
+            next_version="${major}.${minor}.$((patch + 1))"
+            bun pm pkg set "version=$next_version"
             ;;
         pnpm)
             # pnpm uses npm version under the hood
@@ -318,9 +328,10 @@ This script should be sourced by a project-specific script that defines:
 LOGIC:
     1. Detect package manager (bun, pnpm, yarn, npm) based on lockfile
     2. Always update @sudobility dependencies to latest
-    3. Check if there are any changed files (including package.json)
-    4. If changes exist (or --force): validate, bump version, update lock, commit, push
-    5. If no changes: skip to next package
+    3. Clean untracked build artifacts, then validate from source
+    4. Check if there are any changed files (including package.json)
+    5. If changes exist (or --force): bump version, commit, push
+    6. If no changes: skip to next package
 
 SUPPORTED PACKAGE MANAGERS:
     - bun   (detected via bun.lock or bun.lockb)
@@ -365,7 +376,7 @@ get_sudobility_packages() {
         return
     fi
 
-    node -e "
+    bun -e "
         const pkg = require('$pkg_json');
         const deps = { ...pkg.dependencies, ...pkg.devDependencies };
         const sudobility = Object.keys(deps).filter(k => k.startsWith('@sudobility/'));
@@ -381,7 +392,7 @@ get_sudobility_peer_packages() {
         return
     fi
 
-    node -e "
+    bun -e "
         const pkg = require('$pkg_json');
         const peers = pkg.peerDependencies || {};
         const sudobility = Object.keys(peers).filter(k => k.startsWith('@sudobility/'));
@@ -395,7 +406,7 @@ update_peer_dependency() {
     local package_name="$2"
     local new_version="$3"
 
-    node -e "
+    bun -e "
         const fs = require('fs');
         const pkg = require('$pkg_json');
         if (pkg.peerDependencies && pkg.peerDependencies['$package_name']) {
@@ -409,7 +420,7 @@ update_peer_dependency() {
 # Get latest version of a package from npm (bypass cache)
 get_latest_version() {
     local package_name="$1"
-    npm view "${package_name}@latest" version --prefer-online 2>/dev/null || echo ""
+    bun info "${package_name}@latest" version 2>/dev/null || echo ""
 }
 
 # Fetch latest npm versions for multiple packages in parallel
@@ -421,7 +432,7 @@ fetch_latest_versions_parallel() {
 
     for package in "${packages[@]}"; do
         local safe_name="${package//\//_}"
-        ( npm view "${package}@latest" version 2>/dev/null > "$tmpdir/$safe_name" ) &
+        ( bun info "${package}@latest" version 2>/dev/null > "$tmpdir/$safe_name" ) &
         pids+=($!)
     done
 
@@ -475,7 +486,7 @@ published_package_id() {
 
     [ -f "$pkg_json" ] || return 0
 
-    node -e "
+    bun -e "
         try {
             const pkg = require('$pkg_json');
             if (pkg.private) process.exit(0);
@@ -502,7 +513,7 @@ wait_for_npm_publish() {
     local checked_reachable=false
 
     while [ "$waited" -lt "$max_wait" ]; do
-        if [ "$(npm view "${name}@${version}" version 2>/dev/null)" = "$version" ]; then
+        if [ "$(bun info "${name}@${version}" version 2>/dev/null)" = "$version" ]; then
             [ "$waited" -gt 0 ] && log_info "npm served $package_id after ${waited}s"
             return 0
         fi
@@ -514,7 +525,7 @@ wait_for_npm_publish() {
         # miss, since a reachable registry stays reachable.
         if [ "$checked_reachable" = false ]; then
             checked_reachable=true
-            if ! npm view "$name" version >/dev/null 2>&1; then
+            if ! bun info "$name" version >/dev/null 2>&1; then
                 log_error "Cannot read $name from npm at all — this is not publish lag"
                 log_error "Check registry auth (a project .npmrc may reference an unset \${NPM_TOKEN})"
                 return 1
@@ -555,7 +566,7 @@ update_sudobility_deps() {
     # Clean up overrides/resolutions containing file: references
     # These are sometimes added during local development and should not be committed
     local cleaned_file_refs
-    cleaned_file_refs=$(node -e "
+    cleaned_file_refs=$(bun -e "
         const fs = require('fs');
         const pkg = require('$pkg_json');
         let changed = false;
@@ -583,7 +594,7 @@ update_sudobility_deps() {
 
     # Read all @sudobility package names and current versions in one node call
     local deps_info
-    deps_info=$(node -e "
+    deps_info=$(bun -e "
         const pkg = require('$pkg_json');
         const deps = { ...pkg.dependencies, ...pkg.devDependencies };
         const peers = pkg.peerDependencies || {};
@@ -723,6 +734,7 @@ update_sudobility_deps() {
 
 # Cached package.json script flags (set by read_package_scripts)
 _PKG_HAS_BUILD="no"
+_PKG_HAS_CLEAN="no"
 _PKG_HAS_TEST="no"
 _PKG_HAS_UNIT_TEST="no"
 _PKG_HAS_TEST_RUN="no"
@@ -733,15 +745,16 @@ _PKG_HAS_TYPECHECK="no"
 read_package_scripts() {
     local pkg_json="$1"
     if [ ! -f "$pkg_json" ]; then
-        _PKG_HAS_BUILD="no"; _PKG_HAS_TEST="no"; _PKG_HAS_UNIT_TEST="no"
+        _PKG_HAS_BUILD="no"; _PKG_HAS_CLEAN="no"; _PKG_HAS_TEST="no"; _PKG_HAS_UNIT_TEST="no"
         _PKG_HAS_TEST_RUN="no"; _PKG_HAS_LINT="no"; _PKG_HAS_TYPECHECK="no"
         return
     fi
     local result
-    result=$(node -e "
+    result=$(bun -e "
         const s = require('$pkg_json').scripts || {};
         const f = [
             s.build ? 'yes' : 'no',
+            s.clean ? 'yes' : 'no',
             s['test:unit'] ? 'yes' : 'no',
             s['test:unit'] ? 'yes' : 'no',
             s['test:run'] ? 'yes' : 'no',
@@ -749,8 +762,28 @@ read_package_scripts() {
             s.typecheck ? 'yes' : 'no'
         ];
         console.log(f.join(' '));
-    " 2>/dev/null) || result="no no no no no no"
-    read -r _PKG_HAS_BUILD _PKG_HAS_TEST _PKG_HAS_UNIT_TEST _PKG_HAS_TEST_RUN _PKG_HAS_LINT _PKG_HAS_TYPECHECK <<< "$result"
+    " 2>/dev/null) || result="no no no no no no no"
+    read -r _PKG_HAS_BUILD _PKG_HAS_CLEAN _PKG_HAS_TEST _PKG_HAS_UNIT_TEST _PKG_HAS_TEST_RUN _PKG_HAS_LINT _PKG_HAS_TYPECHECK <<< "$result"
+}
+
+# Validate source against a clean checkout rather than whatever build artifacts
+# happen to be left in the developer's workspace. A package self-import such as
+# `@sudobility/music_player/core` can resolve through its local dist/ directory
+# after a build, while failing in CI because CI typechecks before building.
+# Cleaning only when dist/ is untracked keeps this safe for projects that
+# intentionally commit generated artifacts.
+clean_generated_artifacts_for_validation() {
+    local project_dir="$1"
+
+    [ "$_PKG_HAS_CLEAN" = "yes" ] || return 0
+    if git -C "$project_dir" ls-files --error-unmatch dist >/dev/null 2>&1 || \
+       git -C "$project_dir" ls-files -- 'dist/**' | grep -q .; then
+        log_warning "Skipping clean: dist/ contains tracked files"
+        return 0
+    fi
+
+    log_info "Cleaning generated artifacts before validation..."
+    run_check "Clean" pm_run_in_project "$project_dir" clean || return 1
 }
 
 # How many lines of a failed check's output to replay.
@@ -794,9 +827,25 @@ pm_run_ci() {
     CI=true pm_run "$@"
 }
 
+# Run a package script from the package's own directory. This is intentionally
+# a function rather than `bash -c`: pm_run contains the package-manager choice
+# detected for the current project and is not exported to child shells.
+pm_run_in_project() {
+    local project_dir="$1"
+    shift
+    (cd "$project_dir" && pm_run "$@")
+}
+
 # Run validation checks
 validate_python_project() {
     local project_dir="$1"
+    local python_tools="$project_dir/.venv/bin"
+    local ruff_cmd="ruff"
+    local mypy_cmd="mypy"
+    local pytest_cmd="pytest"
+    [ -x "$python_tools/ruff" ] && ruff_cmd="$python_tools/ruff"
+    [ -x "$python_tools/mypy" ] && mypy_cmd="$python_tools/mypy"
+    [ -x "$python_tools/pytest" ] && pytest_cmd="$python_tools/pytest"
 
     # Which directories actually hold Python. `src` was hardcoded, so a project
     # laying its package out as `app/` (FastAPI's convention) failed with
@@ -817,21 +866,25 @@ validate_python_project() {
     # needed to fix the failure it was reporting.
     if [ -f "$project_dir/pyproject.toml" ] && grep -q "ruff" "$project_dir/pyproject.toml" 2>/dev/null && [ -n "$py_paths" ]; then
         log_info "Running ruff check..."
-        run_check "Ruff lint" bash -c "cd '$project_dir' && ruff check $py_paths" || return 1
+        if ! command -v "$ruff_cmd" >/dev/null 2>&1 && [ ! -x "$ruff_cmd" ]; then
+            log_error "Ruff is configured but not installed (checked $ruff_cmd and PATH)"
+            return 1
+        fi
+        run_check "Ruff lint" bash -c "cd '$project_dir' && '$ruff_cmd' check $py_paths" || return 1
         log_info "Running ruff format check..."
-        run_check "Ruff format" bash -c "cd '$project_dir' && ruff format --check $py_paths" || return 1
+        run_check "Ruff format" bash -c "cd '$project_dir' && '$ruff_cmd' format --check $py_paths" || return 1
     fi
 
     # Typecheck
-    if command -v mypy &> /dev/null; then
+    if command -v "$mypy_cmd" &> /dev/null || [ -x "$mypy_cmd" ]; then
         log_info "Running mypy..."
-        run_check "Mypy" bash -c "cd '$project_dir' && mypy $py_src" || return 1
+        run_check "Mypy" bash -c "cd '$project_dir' && '$mypy_cmd' $py_src" || return 1
     fi
 
     # Tests
-    if command -v pytest &> /dev/null; then
+    if command -v "$pytest_cmd" &> /dev/null || [ -x "$pytest_cmd" ]; then
         log_info "Running pytest..."
-        run_check "Tests" bash -c "cd '$project_dir' && pytest -m 'not integration' -q" || return 1
+        run_check "Tests" bash -c "cd '$project_dir' && '$pytest_cmd' -m 'not integration' -q" || return 1
     fi
 
     return 0
@@ -839,6 +892,14 @@ validate_python_project() {
 
 validate_project() {
     local project_dir="$1"
+
+    # Keep validation self-contained. The normal pipeline already cd's into
+    # the project, but direct callers and subpackage validation should not
+    # depend on that ambient state when invoking package-manager scripts.
+    cd "$project_dir" || {
+        log_error "Failed to enter project for validation: $project_dir"
+        return 1
+    }
 
     # Handle Python projects
     if [ "$PKG_MANAGER" = "python" ]; then
@@ -855,6 +916,11 @@ validate_project() {
 
     # Read all script flags in one node call
     read_package_scripts "$pkg_json"
+
+    # Make local validation match CI's clean-checkout ordering. This catches
+    # package self-references and stale generated declarations before anything
+    # is committed or pushed.
+    clean_generated_artifacts_for_validation "$project_dir" || return 1
 
     # Typecheck
     #
@@ -916,6 +982,7 @@ validate_subpackage() {
     log_info "  Validating sub-package: $package_name"
 
     read_package_scripts "$pkg_json"
+    clean_generated_artifacts_for_validation "$package_dir" || return 1
 
     if [ "$_PKG_HAS_UNIT_TEST" = "yes" ]; then
         log_info "    Running unit tests (test:unit)..."
@@ -1105,7 +1172,7 @@ bump_version() {
     log_info "Bumping patch version..."
 
     if pm_version_bump >/dev/null 2>&1; then
-        local new_version=$(node -e "console.log(require('$pkg_json').version)")
+        local new_version=$(bun -e "console.log(require('$pkg_json').version)")
         log_success "Version bumped to $new_version"
         sync_rn_native_versions "$project_dir" "$new_version"
         return 0
@@ -1300,7 +1367,7 @@ commit_and_push() {
 
         git add -A
 
-        local version=$(node -e "console.log(require('./package.json').version)" 2>/dev/null || echo "unknown")
+        local version=$(bun -e "console.log(require('./package.json').version)" 2>/dev/null || echo "unknown")
 
         local commit_msg
 
@@ -1437,7 +1504,7 @@ process_project() {
     # Auto-format TypeScript projects after dependency updates to fix prettier drift
     if [ "$PKG_MANAGER" != "python" ] && [ -f "$project_path/package.json" ]; then
         local has_format_script
-        has_format_script=$(node -e "const s=require('$project_path/package.json').scripts||{};console.log(s.format?'yes':'no')" 2>/dev/null) || has_format_script="no"
+        has_format_script=$(bun -e "const s=require('$project_path/package.json').scripts||{};console.log(s.format?'yes':'no')" 2>/dev/null) || has_format_script="no"
         if [ "$has_format_script" = "yes" ]; then
             log_info "Running format..."
             (cd "$project_path" && pm_run format) 2>&1 || true
