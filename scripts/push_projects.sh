@@ -1,6 +1,6 @@
 #!/bin/bash
 
-PUSH_PROJECTS_VERSION="1.3.0"
+PUSH_PROJECTS_VERSION="1.3.1"
 
 # push_projects.sh - Reusable script to update, validate, version bump, and push projects
 #
@@ -44,6 +44,10 @@ set -u  # Exit on undefined variable
 
 # Disable interactive pager for git commands
 export GIT_PAGER=cat
+# Never wait for a username/password prompt in an unattended release run.
+# Authentication failures should be reported so the project is not mistaken
+# for successfully published.
+export GIT_TERMINAL_PROMPT=0
 
 # Colors for output
 RED='\033[0;31m'
@@ -60,6 +64,9 @@ CONTINUE_ON_ERROR=false
 PROJECTS_FILE=""
 STARTING_PROJECT=""
 AI_COMMIT=true
+AI_COMMIT_PROVIDER="claude"
+AI_COMMIT_TIMEOUT=30
+GIT_OPERATION_TIMEOUT=120
 
 # Failure tracking (used with --continue-on-error)
 declare -a FAILED_PROJECTS=()
@@ -346,6 +353,7 @@ OPTIONS:
     --starting-project       Skip projects until reaching the specified project name
     --continue-on-error, -c  Log failures and continue to the next project.
                              Collects all failures and prints a summary at the end.
+    --codex                  Use Codex CLI to generate commit messages
     --no-ai                  Disable AI-generated commit messages (use heuristic only)
     --help, -h               Show this help message
 
@@ -1297,15 +1305,10 @@ Generated with push_projects.sh"
 $commit_body"
 }
 
-# Generate commit message using AI (claude CLI)
-generate_ai_commit_message() {
+# Build the prompt shared by the AI commit-message providers.
+build_ai_commit_prompt() {
     local version="$1"
     local project_name="$2"
-
-    # Check if claude CLI is available
-    if ! command -v claude &>/dev/null; then
-        return 1
-    fi
 
     local diff_stat diff_content
     diff_stat=$(git diff --cached --stat 2>/dev/null)
@@ -1316,7 +1319,8 @@ generate_ai_commit_message() {
         return 1
     fi
 
-    local prompt="Generate a git commit message for project \"$project_name\" version $version.
+    cat <<EOF
+Generate a git commit message for project "$project_name" version $version.
 
 Rules:
 - First line: conventional commit format (feat/fix/refactor/chore/docs/test/ci: description) under 72 chars
@@ -1330,10 +1334,27 @@ Changed files:
 $diff_stat
 
 Diff:
-$diff_content"
+$diff_content
+EOF
+}
+
+# Generate commit message using Claude CLI.
+generate_claude_commit_message() {
+    local version="$1"
+    local project_name="$2"
+
+    if ! command -v claude &>/dev/null; then
+        return 1
+    fi
+
+    local prompt
+    prompt=$(build_ai_commit_prompt "$version" "$project_name") || return 1
 
     local ai_msg
-    ai_msg=$(echo "$prompt" | claude -p --model haiku 2>/dev/null)
+    # Claude can wait indefinitely for authentication, network access, or a
+    # provider response. A commit must never block the subsequent push, so
+    # fall back to the deterministic message when it exceeds the limit.
+    ai_msg=$(printf '%s\n' "$prompt" | run_with_timeout "$AI_COMMIT_TIMEOUT" claude -p --model haiku 2>/dev/null)
     local exit_code=$?
 
     if [ $exit_code -ne 0 ] || [ -z "$ai_msg" ]; then
@@ -1343,6 +1364,31 @@ $diff_content"
     # Strip markdown code fences if present
     ai_msg=$(echo "$ai_msg" | sed '/^```/d')
 
+    echo "$ai_msg"
+    return 0
+}
+
+# Generate commit message using Codex CLI.
+generate_codex_commit_message() {
+    local version="$1"
+    local project_name="$2"
+
+    if ! command -v codex &>/dev/null; then
+        return 1
+    fi
+
+    local prompt
+    prompt=$(build_ai_commit_prompt "$version" "$project_name") || return 1
+
+    local ai_msg
+    ai_msg=$(printf '%s\n' "$prompt" | run_with_timeout "$AI_COMMIT_TIMEOUT" codex exec --sandbox read-only - 2>/dev/null)
+    local exit_code=$?
+
+    if [ $exit_code -ne 0 ] || [ -z "$ai_msg" ]; then
+        return 1
+    fi
+
+    ai_msg=$(echo "$ai_msg" | sed '/^```/d')
     echo "$ai_msg"
     return 0
 }
@@ -1373,24 +1419,30 @@ commit_and_push() {
 
         # Try AI-generated commit message first, fall back to heuristic
         if [ "$AI_COMMIT" = true ]; then
-            commit_msg=$(generate_ai_commit_message "$version" "$project_name" 2>/dev/null) || true
+            if [ "$AI_COMMIT_PROVIDER" = "codex" ]; then
+                commit_msg=$(generate_codex_commit_message "$version" "$project_name" 2>/dev/null) || true
+            else
+                commit_msg=$(generate_claude_commit_message "$version" "$project_name" 2>/dev/null) || true
+            fi
         fi
 
         if [ -z "$commit_msg" ]; then
             commit_msg=$(analyze_changes "$version" "$FORCE_MODE")
         fi
 
-        if git commit -m "$commit_msg" >/dev/null 2>&1; then
+        local commit_output
+        if commit_output=$(run_with_timeout "$GIT_OPERATION_TIMEOUT" git commit -m "$commit_msg" 2>&1); then
             log_success "Changes committed"
         else
-            log_error "Failed to commit changes"
+            echo "$commit_output"
+            log_error "Failed to commit changes (timed out or exited unsuccessfully)"
             return 1
         fi
     fi
 
     log_info "Pushing to remote..."
     local push_output
-    push_output=$(git push 2>&1)
+    push_output=$(run_with_timeout "$GIT_OPERATION_TIMEOUT" git push 2>&1)
     local push_exit_code=$?
 
     # If push fails due to no upstream, retry with --set-upstream
@@ -1399,7 +1451,7 @@ commit_and_push() {
         current_branch=$(git branch --show-current 2>/dev/null)
         if echo "$push_output" | grep -q "no upstream branch\|push.autoSetupRemote\|has no upstream"; then
             log_info "No upstream branch, pushing with --set-upstream origin $current_branch"
-            push_output=$(git push --set-upstream origin "$current_branch" 2>&1)
+            push_output=$(run_with_timeout "$GIT_OPERATION_TIMEOUT" git push --set-upstream origin "$current_branch" 2>&1)
             push_exit_code=$?
         fi
     fi
@@ -1769,6 +1821,11 @@ parse_args() {
                 ;;
             --continue-on-error|-c)
                 CONTINUE_ON_ERROR=true
+                shift
+                ;;
+            --codex)
+                AI_COMMIT=true
+                AI_COMMIT_PROVIDER="codex"
                 shift
                 ;;
             --projects-file)
