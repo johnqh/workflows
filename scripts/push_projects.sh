@@ -1,6 +1,6 @@
 #!/bin/bash
 
-PUSH_PROJECTS_VERSION="1.4.0"
+PUSH_PROJECTS_VERSION="1.4.1"
 
 # push_projects.sh - Reusable script to update, validate, version bump, and push projects
 #
@@ -1568,7 +1568,10 @@ remove_sudobility_symlinks() {
     done
 
     log_info "Reinstalling to fetch packages from npm..."
-    pm_install >/dev/null 2>&1
+    if ! run_with_timeout "$GIT_OPERATION_TIMEOUT" pm_install >/dev/null 2>&1; then
+        log_error "Reinstall timed out or failed while replacing symlinks"
+        return 1
+    fi
     log_success "Replaced symlinks with npm packages"
 }
 
@@ -1680,8 +1683,16 @@ process_project() {
         fi
 
         log_info "Updating $PKG_LOCKFILE..."
-        if ! pm_install >/dev/null 2>&1; then
-            log_error "Failed to update $PKG_LOCKFILE"
+        local install_exit_code=0
+        if run_with_timeout "$GIT_OPERATION_TIMEOUT" pm_install; then
+            :
+        else
+            install_exit_code=$?
+            if [ "$install_exit_code" -eq 143 ]; then
+                log_error "Updating $PKG_LOCKFILE timed out after ${GIT_OPERATION_TIMEOUT}s"
+            else
+                log_error "Failed to update $PKG_LOCKFILE (exit code: $install_exit_code)"
+            fi
             return 1
         fi
         log_success "$PKG_LOCKFILE updated"
