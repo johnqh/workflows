@@ -1462,14 +1462,17 @@ commit_and_push() {
         printf '%s\n' "----- BEGIN COMMIT MESSAGE -----"
         printf '%s\n' "$commit_msg"
         printf '%s\n' "----- END COMMIT MESSAGE -----"
-        log_info "Creating git commit..."
-        local commit_output
         # This is an unattended release commit. Skip repository hooks and
         # signing prompts; validation already ran immediately beforehand.
-        if commit_output=$(run_with_timeout "$GIT_OPERATION_TIMEOUT" git commit --no-verify --no-gpg-sign -m "$commit_msg" 2>&1); then
+        log_info "Creating git commit (no hooks, no signing)..."
+        local commit_started_at
+        commit_started_at=$(date +%s)
+        if run_with_timeout "$GIT_OPERATION_TIMEOUT" git commit --no-verify --no-gpg-sign -m "$commit_msg"; then
+            local commit_duration
+            commit_duration=$(( $(date +%s) - commit_started_at ))
+            log_info "git commit completed in ${commit_duration}s"
             log_success "Changes committed"
         else
-            echo "$commit_output"
             log_error "Failed to commit changes (timed out or exited unsuccessfully)"
             return 1
         fi
