@@ -231,7 +231,7 @@ bun install   # or: npm install
 
 ### Secret-Based Auto-Detection
 
-Every deployment job independently checks its secrets. Adding a deployment target requires only adding secrets to GitHub repo settings -- no workflow file changes. Multiple targets coexist (e.g., npm + Docker for wildduck). Missing secrets result in a clean skip with info log.
+Deployment targets are enabled only when their required secrets are configured. The Cloudflare configuration is detected in `check_for_release` and exposed as a job output, so projects without Cloudflare credentials skip the entire Cloudflare job before checkout, dependency installation, or build. Multiple targets coexist (e.g., npm + Docker for wildduck).
 
 ### Package Manager Auto-Detection
 

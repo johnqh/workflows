@@ -426,6 +426,7 @@ jobs:
       has_pyproject_toml: ${{ steps.check.outputs.has_pyproject_toml }}
       package_name: ${{ steps.check.outputs.package_name }}
       is_develop_branch: ${{ steps.check.outputs.is_develop_branch }}
+      cloudflare_configured: ${{ steps.check.outputs.cloudflare_configured }}
     steps:
       - name: "Checkout"
         uses: actions/checkout@v6
@@ -439,7 +440,18 @@ jobs:
 
       - name: "Check if should trigger release"
         id: check
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
+          if [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "cloudflare_configured=true" >> "$GITHUB_OUTPUT"
+            echo "☁️ Cloudflare secrets are configured"
+          else
+            echo "cloudflare_configured=false" >> "$GITHUB_OUTPUT"
+            echo "ℹ️ Cloudflare secrets not configured; skipping Cloudflare deployment"
+          fi
+
           # Check if we're on develop branch
           BRANCH_NAME="${{ github.ref_name }}"
           echo "Branch: $BRANCH_NAME"
@@ -1003,29 +1015,18 @@ jobs:
     needs:
       - test
       - check_for_release
-    if: needs.check_for_release.outputs.should_release == 'true'
+    if: |
+      needs.check_for_release.outputs.should_release == 'true' &&
+      needs.check_for_release.outputs.cloudflare_configured == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       deployments: write
     steps:
-      - name: "Check if Cloudflare secrets are configured"
-        id: check-secrets
-        run: |
-          if [ -n "${{ secrets.CLOUDFLARE_API_TOKEN }}" ] && [ -n "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}" ]; then
-            echo "configured=true" >> $GITHUB_OUTPUT
-            echo "✅ Cloudflare secrets are configured"
-          else
-            echo "configured=false" >> $GITHUB_OUTPUT
-            echo "ℹ️  Cloudflare secrets not configured, skipping deployment"
-          fi
-
       - name: "Checkout"
-        if: steps.check-secrets.outputs.configured == 'true'
         uses: actions/checkout@v6
 
       - name: "Setup Node.js"
-        if: steps.check-secrets.outputs.configured == 'true'
         uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.node-version }}
@@ -1033,7 +1034,6 @@ jobs:
           cache: "npm"
 
       - name: "Install dependencies"
-        if: steps.check-secrets.outputs.configured == 'true'
         run: |
           # Workaround for Rollup optional dependencies issue
           # https://github.com/npm/cli/issues/4828
@@ -1049,11 +1049,9 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: "Run linting (non-blocking)"
-        if: steps.check-secrets.outputs.configured == 'true'
         run: npm run lint || echo "⚠️  Linting failed but continuing with deployment"
 
       - name: "Build project"
-        if: steps.check-secrets.outputs.configured == 'true'
         run: |
           # Pass all secrets as environment variables to the build
           # Infrastructure tokens (NPM_TOKEN, CLOUDFLARE_*, etc.) won't affect the build
@@ -1062,7 +1060,6 @@ jobs:
           npm run build
 
       - name: "Determine project name"
-        if: steps.check-secrets.outputs.configured == 'true'
         id: project-name
         run: |
           if [ -n "${{ inputs.cloudflare-project-name }}" ]; then
@@ -1074,7 +1071,6 @@ jobs:
           echo "☁️  Cloudflare project name: $PROJECT_NAME"
 
       - name: "Deploy to Cloudflare Pages"
-        if: steps.check-secrets.outputs.configured == 'true'
         uses: cloudflare/pages-action@v1
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -1084,7 +1080,6 @@ jobs:
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Notify Cloudflare deployment success"
-        if: success() && steps.check-secrets.outputs.configured == 'true'
         run: |
           echo "☁️  Deployed to Cloudflare Pages successfully!"
           echo "• Project: ${{ steps.project-name.outputs.name }}"
