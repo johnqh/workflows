@@ -446,45 +446,79 @@ async function main() {
       }
     }
 
-    // Translate one string at a time, splitting languages based on word count.
-    // For each string: langsPerCall = max(floor(wordLimit / wordCount), 1)
-    // So a 5-word string gets all 15 langs at once, a 40-word string gets 2 at a time.
-    for (let i = 0; i < missingEntries.length; i++) {
-      const entry = missingEntries[i];
-      const words = countWords(entry.value);
-      const langsPerCall = Math.max(Math.floor(wordLimit / Math.max(words, 1)), 1);
+    // Batch multiple strings per call. The two limits apply to the complete
+    // payload: strings × languages and words × languages.
+    const wordCounts = missingEntries.map(entry => countWords(entry.value));
+    const maxWords = Math.max(...wordCounts, 1);
+    const maxLangsPerCall = Math.max(
+      Math.min(
+        langsWithMissing.length,
+        langBatch || langsWithMissing.length,
+        Math.floor(wordLimit / maxWords) || 1
+      ),
+      1
+    );
 
-      // Split languages into chunks
-      const langChunks = [];
-      for (let l = 0; l < langsWithMissing.length; l += langsPerCall) {
-        langChunks.push(langsWithMissing.slice(l, l + langsPerCall));
-      }
+    const langChunks = [];
+    for (let l = 0; l < langsWithMissing.length; l += maxLangsPerCall) {
+      langChunks.push(langsWithMissing.slice(l, l + maxLangsPerCall));
+    }
 
-      for (let lc = 0; lc < langChunks.length; lc++) {
-        const langChunk = langChunks[lc];
+    for (let lc = 0; lc < langChunks.length; lc++) {
+      const langChunk = langChunks[lc];
+      const maxStrings = Math.max(Math.floor(batchLimit / langChunk.length), 1);
+      const maxBatchWords = Math.max(Math.floor(wordLimit / langChunk.length), 1);
+
+      for (let start = 0; start < missingEntries.length;) {
+        const batchEntries = [];
+        let batchWords = 0;
+
+        while (start + batchEntries.length < missingEntries.length && batchEntries.length < maxStrings) {
+          const nextWords = wordCounts[start + batchEntries.length];
+          if (batchEntries.length > 0 && batchWords + nextWords > maxBatchWords) break;
+          batchEntries.push(missingEntries[start + batchEntries.length]);
+          batchWords += nextWords;
+        }
+
+        const batchStart = start + 1;
+        const batchEnd = start + batchEntries.length;
         const langLabel = langChunks.length > 1 ? ` [langs ${lc + 1}/${langChunks.length}]` : '';
-
-        console.log(`  ${i + 1}/${missingEntries.length}${langLabel}: ~${words} words × ${langChunk.length} lang(s)`);
+        console.log(
+          `  ${batchStart}-${batchEnd}/${missingEntries.length}${langLabel}: ` +
+          `~${batchWords} words × ${langChunk.length} lang(s), ${batchEntries.length} string(s)`
+        );
 
         try {
-          const translations = await translateBatch([entry.value], langChunk);
+          const translations = await translateBatch(
+            batchEntries.map(entry => entry.value),
+            langChunk
+          );
 
           for (const lang of langChunk) {
             const translated = translations[lang];
-            if (!translated || !translated[0]) {
-              console.warn(`  Warning: no translation returned for ${lang}`);
+            if (!translated || translated.length !== batchEntries.length) {
+              console.warn(
+                `  Warning: expected ${batchEntries.length} translations for ${lang}, ` +
+                `received ${translated?.length || 0}`
+              );
               continue;
             }
-            translationsByLang[lang][entry.path] = translated[0];
+            for (let j = 0; j < batchEntries.length; j++) {
+              if (translated[j]) {
+                translationsByLang[lang][batchEntries[j].path] = translated[j];
+              }
+            }
           }
         } catch (error) {
-          console.error(`  FATAL: API failed at string ${i + 1}${langLabel}: ${error.message}`);
+          console.error(`  FATAL: API failed at strings ${batchStart}-${batchEnd}${langLabel}: ${error.message}`);
           console.error('  Saving translations from completed strings before stopping...');
           saveTranslatedFiles();
           process.exit(1);
         }
 
-        // Save after each API call so progress is preserved
+        start += batchEntries.length;
+
+        // Save after each API call so progress is preserved.
         saveTranslatedFiles();
       }
     }
