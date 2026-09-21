@@ -51,7 +51,7 @@ let localesDir = null;
 let endpointUrl = null;
 let apiKey = null;
 let envFile = null;
-let batchLimit = 50;
+let batchLimit = 500;
 let langBatch = 0; // 0 = all languages at once
 let wordLimit = 400; // max words × languages per API call
 
