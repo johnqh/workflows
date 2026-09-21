@@ -53,7 +53,7 @@ let apiKey = null;
 let envFile = null;
 let batchLimit = 500;
 let langBatch = 0; // 0 = all languages at once
-let wordLimit = 400; // max words × languages per API call
+let wordLimit = 4000; // max words × languages per API call
 
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
