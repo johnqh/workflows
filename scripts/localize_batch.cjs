@@ -43,7 +43,7 @@ function printUsage() {
   console.error('  --env <file>       Path to .env file');
   console.error('  --batch-limit <n>  Max translations per API call (strings × languages, default: 50)');
   console.error('  --lang-batch <n>   Max languages per API call (default: all at once)');
-  console.error('  --word-limit <n>   Target words × languages per API call (default: 40).')
+  console.error('  --word-limit <n>   Target words × languages per API call (default: 1000).')
   console.error('                     Controls batching only — all strings are always translated.');
 }
 
