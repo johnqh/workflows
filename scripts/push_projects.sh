@@ -1,6 +1,6 @@
 #!/bin/bash
 
-PUSH_PROJECTS_VERSION="1.4.1"
+PUSH_PROJECTS_VERSION="1.4.2"
 
 # push_projects.sh - Reusable script to update, validate, version bump, and push projects
 #
@@ -1202,9 +1202,27 @@ bump_version() {
         fi
 
         log_info "Bumping patch version (Python)..."
-        local current_version=$(python3 -c "import tomllib; print(tomllib.load(open('$pyproject','rb'))['project']['version'])")
+        # Plain grep/sed on the `version = "X.Y.Z"` line, not `python3 -c
+        # "import tomllib; ..."`: tomllib is 3.11+ only, and a machine whose
+        # default `python3` predates that (macOS's system one is 3.9.6) fails
+        # this silently — `current_version` came back empty, the sed below
+        # matched nothing, and `pyproject.toml` was never actually touched.
+        # midi_transcriber_api shipped nine commits' worth of real fixes,
+        # including its own port bug, that Docker Hub never received: CI's
+        # publish step compares against the *pinned* release version, which
+        # never moved past the one already published, so every push after
+        # the first was silently treated as "nothing new to publish."
+        local current_version=$(grep -m1 '^version = "' "$pyproject" | sed -E 's/^version = "([^"]+)".*/\1/')
+        if [ -z "$current_version" ]; then
+            log_error "Could not read a version from $pyproject"
+            return 1
+        fi
         local major minor patch
         IFS='.' read -r major minor patch <<< "$current_version"
+        if [ -z "$major" ] || [ -z "$minor" ] || [ -z "$patch" ]; then
+            log_error "Version '$current_version' in $pyproject is not major.minor.patch"
+            return 1
+        fi
         patch=$((patch + 1))
         local new_version="$major.$minor.$patch"
         # Update version in pyproject.toml
