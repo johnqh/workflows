@@ -461,10 +461,14 @@ def action_submit(args):
         # Commit
         print("Committing edit...")
         commit_edit(token, pkg, edit_id)
-        print(
-            f"Done. Version {args.package_version} is ready as draft "
-            f"on Google Play Console ({args.track} track)."
-        )
+        if args.metadata_only:
+            # No bundle was uploaded, so no release exists to be a draft.
+            print("Done. Store listing updated on Google Play Console.")
+        else:
+            print(
+                f"Done. Version {args.package_version} is ready as draft "
+                f"on Google Play Console ({args.track} track)."
+            )
 
     except Exception:
         print("Error during submission. Deleting edit...", file=sys.stderr)

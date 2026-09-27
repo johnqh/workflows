@@ -42,6 +42,16 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+# Print the first .ipa under a directory, or nothing. A directory that does not
+# exist yet (no release build has ever run) is not an error: with `set -e` and
+# `pipefail`, a bare `find` on it aborted the whole script without a message.
+find_ipa() {
+  [ -d "$1" ] || return 0
+  find "$1" -name "*.ipa" 2>/dev/null | head -1 || true
+}
+
 # ── Load env ─────────────────────────────────────────────────────────────────
 
 ENV_FILE="$APP_STORE_DIR/.env"
@@ -109,7 +119,7 @@ for platform in "${PLATFORMS[@]}"; do
       if [ "$METADATA_ONLY" = false ]; then
         # Step 2: Build if needed
         IPA_DIR="$APP_STORE_DIR/builds/release/ipa"
-        IPA_FILE=$(find "$IPA_DIR" -name "*.ipa" 2>/dev/null | head -1)
+        IPA_FILE=$(find_ipa "$IPA_DIR")
         IOS_APP_NAME=$(jq -r '.build.ios.appName // "App"' "$APP_STORE_DIR/info.json")
         IOS_ARCHIVE="$APP_STORE_DIR/builds/release/${IOS_APP_NAME}.xcarchive"
         EXPORT_OPTIONS="$APP_STORE_DIR/ExportOptions.plist"
@@ -128,7 +138,7 @@ for platform in "${PLATFORMS[@]}"; do
                 -exportPath "$IPA_DIR" \
                 -exportOptionsPlist "$EXPORT_OPTIONS" \
                 -quiet
-              IPA_FILE=$(find "$IPA_DIR" -name "*.ipa" 2>/dev/null | head -1)
+              IPA_FILE=$(find_ipa "$IPA_DIR")
             fi
           fi
 
@@ -143,7 +153,7 @@ for platform in "${PLATFORMS[@]}"; do
               echo "  [dry-run] Would run build.sh --force"
             else
               "$SCRIPT_DIR/build.sh" --platform ios --force
-              IPA_FILE=$(find "$IPA_DIR" -name "*.ipa" 2>/dev/null | head -1)
+              IPA_FILE=$(find_ipa "$IPA_DIR")
               if [ -z "$IPA_FILE" ]; then
                 echo "Error: Build completed but no IPA found in $IPA_DIR"
                 exit 1
