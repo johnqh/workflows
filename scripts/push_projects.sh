@@ -1,6 +1,6 @@
 #!/bin/bash
 
-PUSH_PROJECTS_VERSION="1.4.2"
+PUSH_PROJECTS_VERSION="1.5.0"
 
 # push_projects.sh - Reusable script to update, validate, version bump, and push projects
 #
@@ -76,6 +76,10 @@ declare -a FAILED_REASONS=()
 # Package manager for current project (detected per-project)
 PKG_MANAGER=""
 PKG_LOCKFILE=""
+
+# Whether the current project's version was bumped (set per-project).
+# React Native apps are never bumped; commit messages follow this flag.
+VERSION_BUMPED=true
 
 # Detect package manager based on lockfile
 detect_package_manager() {
@@ -358,6 +362,8 @@ LOGIC:
     3. Clean untracked build artifacts, then validate from source
     4. Check if there are any changed files (including package.json)
     5. If changes exist (or --force): bump version, commit, push
+       React Native apps (react-native dependency + ios/ or android/)
+       are committed and pushed without a version bump, even with --force
     6. If no changes: skip to next package
 
 SUPPORTED PACKAGE MANAGERS:
@@ -1116,6 +1122,28 @@ process_subpackages() {
     return 0
 }
 
+# A React Native app (as opposed to an RN library published to npm) has
+# react-native as a direct dependency and a native ios/ or android/ project.
+# Its version is the store release version, managed by hand, so it is never
+# bumped here. RN libraries list react-native as a peer/dev dependency and
+# still need the bump for CI to publish them.
+is_react_native_app() {
+    local project_dir="$1"
+    local pkg_json="$project_dir/package.json"
+
+    if [ ! -f "$pkg_json" ]; then
+        return 1
+    fi
+
+    if [ ! -d "$project_dir/ios" ] && [ ! -d "$project_dir/android" ]; then
+        return 1
+    fi
+
+    local has_rn_dep
+    has_rn_dep=$(bun -e "const d=require('$pkg_json').dependencies||{};console.log(d['react-native']?'yes':'no')" 2>/dev/null) || has_rn_dep="no"
+    [ "$has_rn_dep" = "yes" ]
+}
+
 # Sync version to React Native native platform files (iOS, Android, macOS, Windows)
 sync_rn_native_versions() {
     local project_dir="$1"
@@ -1289,13 +1317,17 @@ analyze_changes() {
     local commit_type="chore"
     local commit_title=""
     local commit_body=""
+    local bump_suffix=" and bump version to $version"
+    if [ "$VERSION_BUMPED" = false ]; then
+        bump_suffix=""
+    fi
 
-    if [ "$force_mode" = "true" ]; then
+    if [ "$force_mode" = "true" ] && [ "$VERSION_BUMPED" = true ]; then
         commit_title="chore: force bump version to $version"
         commit_body="- Force version bump to re-trigger CI/CD publish"
     elif [ "$total_code_changes" -eq 0 ]; then
         # Only dependency/version updates
-        commit_title="chore: update @sudobility dependencies and bump version to $version"
+        commit_title="chore: update @sudobility dependencies$bump_suffix"
         commit_body="- Update @sudobility dependencies to latest versions from npm"
     else
         # Determine the primary type of change for the commit title
@@ -1304,24 +1336,24 @@ analyze_changes() {
             local has_new_files=$(git diff --cached --name-status | grep -E '^A.*src/' || true)
             if [ -n "$has_new_files" ]; then
                 commit_type="feat"
-                commit_title="feat: add new functionality and bump version to $version"
+                commit_title="feat: add new functionality$bump_suffix"
             else
                 commit_type="refactor"
-                commit_title="refactor: update source code and bump version to $version"
+                commit_title="refactor: update source code$bump_suffix"
             fi
         elif [ "$test_count" -gt 0 ] && [ "$src_count" -eq 0 ]; then
             commit_type="test"
-            commit_title="test: update tests and bump version to $version"
+            commit_title="test: update tests$bump_suffix"
         elif [ "$config_count" -gt 0 ]; then
-            commit_title="chore: update configuration and bump version to $version"
+            commit_title="chore: update configuration$bump_suffix"
         elif [ "$doc_count" -gt 0 ]; then
             commit_type="docs"
-            commit_title="docs: update documentation and bump version to $version"
+            commit_title="docs: update documentation$bump_suffix"
         elif [ "$ci_count" -gt 0 ]; then
             commit_type="ci"
-            commit_title="ci: update CI/CD configuration and bump version to $version"
+            commit_title="ci: update CI/CD configuration$bump_suffix"
         else
-            commit_title="chore: update files and bump version to $version"
+            commit_title="chore: update files$bump_suffix"
         fi
 
         # Build detailed body with changed file summaries
@@ -1363,8 +1395,12 @@ $src_file_list"
 
     # Append common footer
     commit_body="$commit_body
-- All validation checks passed (lint, typecheck, tests, build)
-- Version bumped to $version
+- All validation checks passed (lint, typecheck, tests, build)"
+    if [ "$VERSION_BUMPED" = true ]; then
+        commit_body="$commit_body
+- Version bumped to $version"
+    fi
+    commit_body="$commit_body
 
 Generated with push_projects.sh"
 
@@ -1387,12 +1423,17 @@ build_ai_commit_prompt() {
         return 1
     fi
 
+    local version_rule="- Include \"and bump version to $version\" at the end of the first line"
+    if [ "$VERSION_BUMPED" = false ]; then
+        version_rule="- The version was NOT bumped; do not mention a version or a version bump"
+    fi
+
     cat <<EOF
 Generate a git commit message for project "$project_name" version $version.
 
 Rules:
 - First line: conventional commit format (feat/fix/refactor/chore/docs/test/ci: description) under 72 chars
-- Include \"and bump version to $version\" at the end of the first line
+$version_rule
 - Add a blank line then a brief body (2-5 bullet points) summarizing the changes
 - End with a blank line and: Generated with push_projects.sh
 - Be specific about WHAT changed, not generic
@@ -1680,7 +1721,18 @@ process_project() {
         return 2  # Return 2 to indicate "skipped, no changes"
     fi
 
-    if [ "$FORCE_MODE" = true ] && [ "$has_changes" = false ]; then
+    VERSION_BUMPED=true
+    if is_react_native_app "$project_path"; then
+        VERSION_BUMPED=false
+    fi
+
+    if [ "$VERSION_BUMPED" = false ]; then
+        if [ "$has_changes" = false ] && [ "$has_unpushed" = false ]; then
+            log_info "$project_name is a React Native app (no version bump) with no changes, skipping"
+            return 2
+        fi
+        log_info "React Native app: proceeding with validation, version will not be bumped"
+    elif [ "$FORCE_MODE" = true ] && [ "$has_changes" = false ]; then
         log_warning "FORCE MODE: Proceeding with version bump despite no changes"
     else
         log_info "Changes detected, proceeding with validation and version bump"
@@ -1695,7 +1747,9 @@ process_project() {
     log_success "All validation checks passed"
 
     if [ -f "$project_path/package.json" ]; then
-        if ! bump_version "$project_path"; then
+        if [ "$VERSION_BUMPED" = false ]; then
+            log_info "Skipping version bump (React Native app)"
+        elif ! bump_version "$project_path"; then
             log_error "Failed to bump version for $project_name"
             return 1
         fi

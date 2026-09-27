@@ -179,6 +179,8 @@ Multi-project orchestration for the 0xmail ecosystem. Can be sourced or run dire
 
 **Per-project pipeline:** detect PM, update `@sudobility/*` deps to latest, optionally process sub-packages, check for changes, validate (typecheck/lint/test/build), bump patch version, update lockfile, generate commit message (AI or heuristic), commit and push.
 
+**React Native apps are never version-bumped.** A project with `react-native` in `dependencies` and an `ios/` or `android/` directory (`is_react_native_app`) is validated, committed and pushed at its existing version, even with `--force`; its version is the store release version. RN libraries (`*_rn` packages with `react-native` as a peer/dev dependency) are still bumped so CI publishes them.
+
 **AI commit messages**: Uses `claude -p --model haiku` to generate meaningful conventional commit messages from the staged diff. Falls back to heuristic analysis if `claude` CLI is not available. Disable with `--no-ai`.
 
 **Flags**: `--force`/`-f`, `--subpackages`/`-s`, `--continue-on-error`/`-c`, `--no-ai`, `--projects-file`, `--starting-project`, `--help`/`-h`. Project spec format: `path:delay_seconds`.
