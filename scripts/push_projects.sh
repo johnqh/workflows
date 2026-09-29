@@ -1191,7 +1191,11 @@ sync_rn_native_versions() {
     local windows_manifest
     windows_manifest=$(find "$project_dir/windows" -name "Package.appxmanifest" -maxdepth 3 2>/dev/null | head -1)
     if [ -n "$windows_manifest" ] && [ -f "$windows_manifest" ]; then
-        sed -i '' "s/Version=\"[0-9]*\.[0-9]*\.[0-9]*\.[0-9]*\"/Version=\"$version.0\"/" "$windows_manifest"
+        # Match only the package's own `Version` attribute. An unanchored
+        # `Version="..."` also matches the tail of `MinVersion="..."` on the
+        # TargetDeviceFamily lines, which overwrote the minimum Windows version
+        # with the app version on every release.
+        sed -i '' "s/\([[:space:]]\)Version=\"[0-9]*\.[0-9]*\.[0-9]*\.[0-9]*\"/\1Version=\"$version.0\"/" "$windows_manifest"
         log_info "  Updated Windows Package.appxmanifest"
     fi
 }
