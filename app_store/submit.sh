@@ -68,8 +68,11 @@ if [ "$PROJECT_TYPE" = "native" ]; then
 else
   FULL_VERSION=$(jq -r '.version' "$PROJECT_DIR/package.json")
 fi
-PACKAGE_VERSION=$(echo "$FULL_VERSION" | cut -d. -f1-2)
-echo "App version: $PACKAGE_VERSION (from $FULL_VERSION)"
+# The version as written, all three parts. It used to be cut to major.minor,
+# so 1.8.2 was refused as the 1.8 already on sale, and a 1.1.1 draft was
+# asked to rename itself to a 1.1 that had been used.
+PACKAGE_VERSION="$FULL_VERSION"
+echo "App version: $PACKAGE_VERSION"
 
 # ── Process platforms ────────────────────────────────────────────────────────
 

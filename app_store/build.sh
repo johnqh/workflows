@@ -69,9 +69,12 @@ if [ "$PROJECT_TYPE" = "native" ]; then
 else
   FULL_VERSION=$(jq -r '.version' "$PROJECT_DIR/package.json")
 fi
-APP_VERSION=$(echo "$FULL_VERSION" | cut -d. -f1-2)
+# The version as written, all three parts. It used to be cut to major.minor,
+# which stamped a 1.1.1 release as 1.1 — a build that matches no 1.1.1 draft
+# in the store, and collides with the 1.1 already released.
+APP_VERSION="$FULL_VERSION"
 BUILD_NUMBER=$(date +%Y%m%d%H%M)
-echo "App version: $APP_VERSION (build $BUILD_NUMBER, from $FULL_VERSION)"
+echo "App version: $APP_VERSION (build $BUILD_NUMBER)"
 
 if [ "$PROJECT_TYPE" = "rn" ]; then
   if [ "$DRY_RUN" = true ]; then
