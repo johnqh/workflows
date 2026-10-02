@@ -14,6 +14,10 @@
 #   --languages <list>  Comma-separated language codes to capture (default: all).
 #   --paths <list>      Comma-separated path values to capture (default: all). Must match paths.json entries.
 #   --delay <seconds>   Seconds to wait before capture (default: 8).
+#
+# paths.json entries are strings, or {"path": "...", "delay": <seconds>} for a
+# shot that needs longer than --delay — a screen that is still loading or
+# animating after the usual wait. The longer of the two applies.
 #   --dry-run           Print actions without executing.
 
 set -eo pipefail
@@ -111,12 +115,16 @@ else
 fi
 
 ALL_PATHS=()
-while IFS= read -r line; do ALL_PATHS+=("$line"); done < <(jq -r '.[]' "$PATHS_JSON")
+while IFS= read -r line; do ALL_PATHS+=("$line"); done < <(jq -r '.[] | if type == "string" then . else .path end' "$PATHS_JSON")
+# Each path's own delay, or empty for --delay alone; parallel to ALL_PATHS.
+ALL_PATH_DELAYS=()
+while IFS= read -r line; do ALL_PATH_DELAYS+=("$line"); done < <(jq -r '.[] | if type == "object" then (.delay // "") else "" end' "$PATHS_JSON")
 
 # Build parallel arrays of (index, path) so seq numbers match paths.json positions.
 # When --paths filters a subset, the original 1-based index is preserved.
 declare -a PATH_INDICES=()
 PATHS=()
+PATH_DELAYS=()
 if [ -n "$PATHS_FILTER" ]; then
   IFS=',' read -ra PATH_FILTER_ARR <<< "$PATHS_FILTER"
   for i in "${!ALL_PATHS[@]}"; do
@@ -124,6 +132,7 @@ if [ -n "$PATHS_FILTER" ]; then
       if [ "${ALL_PATHS[$i]}" = "$filter" ]; then
         PATH_INDICES+=("$((i + 1))")
         PATHS+=("${ALL_PATHS[$i]}")
+        PATH_DELAYS+=("${ALL_PATH_DELAYS[$i]}")
         break
       fi
     done
@@ -132,6 +141,7 @@ else
   for i in "${!ALL_PATHS[@]}"; do
     PATH_INDICES+=("$((i + 1))")
     PATHS+=("${ALL_PATHS[$i]}")
+    PATH_DELAYS+=("${ALL_PATH_DELAYS[$i]}")
   done
 fi
 
@@ -147,26 +157,26 @@ echo ""
 # ── Capture functions ────────────────────────────────────────────────────────
 
 capture_ios() {
-  local udid="$1" url="$2" output="$3"
+  local udid="$1" url="$2" output="$3" delay="${4:-$DELAY}"
   # Ensure app is in foreground so openurl doesn't trigger "Open in...?" dialog
   xcrun simctl launch "$udid" "$BUNDLE_ID" 2>/dev/null || true
   sleep 2
   xcrun simctl openurl "$udid" "$url"
-  sleep "$DELAY"
+  sleep "$delay"
   xcrun simctl io "$udid" screenshot "$output"
 }
 
 capture_android() {
-  local serial="$1" url="$2" output="$3"
+  local serial="$1" url="$2" output="$3" delay="${4:-$DELAY}"
   "$ADB" -s "$serial" shell am start -a android.intent.action.VIEW -d "'$url'" &>/dev/null
-  sleep "$DELAY"
+  sleep "$delay"
   "$ADB" -s "$serial" exec-out screencap -p > "$output"
 }
 
 capture_macos() {
-  local url="$1" output="$2"
+  local url="$1" output="$2" delay="${3:-$DELAY}"
   open_macos_deeplink "$url"
-  sleep "$DELAY"
+  sleep "$delay"
   capture_macos_screenshot "$output"
 }
 
@@ -199,7 +209,12 @@ switch_language() {
 }
 
 capture_screenshot() {
-  local lang="$1" path="$2" seq="$3"
+  local lang="$1" path="$2" seq="$3" path_delay="${4:-}"
+  # A path's own delay when longer than --delay, never shorter.
+  local delay="$DELAY"
+  if [ -n "$path_delay" ] && awk "BEGIN { exit !($path_delay > $DELAY) }"; then
+    delay="$path_delay"
+  fi
   local url="${SCHEME}:///${lang}${path}"
   local out_dir="$APP_STORE_DIR/screenshots/raw/$DEVICE_KEY/$lang"
   mkdir -p "$out_dir"
@@ -207,18 +222,18 @@ capture_screenshot() {
 
   count=$((count + 1))
   if [ "$DRY_RUN" = true ]; then
-    echo "  [$count/$total] [$lang] $url → $output"
+    echo "  [$count/$total] [$lang] $url → $output (wait ${delay}s)"
   else
     echo "  [$count/$total] [$lang] ${seq}.png"
     if [ "$DEVICE_TYPE" = "simulator" ]; then
-      capture_ios "$UDID" "$url" "$output"
+      capture_ios "$UDID" "$url" "$output" "$delay"
       if [ "$ORIENTATION" = "landscape" ] && is_tablet_device "$DEVICE_KEY"; then
         rotate_screenshot_landscape "$output"
       fi
     elif [ "$DEVICE_TYPE" = "native" ]; then
-      capture_macos "$url" "$output"
+      capture_macos "$url" "$output" "$delay"
     else
-      capture_android "$SERIAL" "$url" "$output"
+      capture_android "$SERIAL" "$url" "$output" "$delay"
       if [ "$ORIENTATION" = "landscape" ] && is_tablet_device "$DEVICE_KEY"; then
         img_w=$(sips -g pixelWidth "$output" 2>/dev/null | awk '/pixelWidth/{print $2}')
         img_h=$(sips -g pixelHeight "$output" 2>/dev/null | awk '/pixelHeight/{print $2}')
@@ -239,7 +254,7 @@ if [ "$LOOP_ORDER" = "paths_first" ]; then
     seq="${PATH_INDICES[$path_idx]}"
     for lang in "${LANGUAGES[@]}"; do
       switch_language "$lang"
-      capture_screenshot "$lang" "$path" "$seq"
+      capture_screenshot "$lang" "$path" "$seq" "${PATH_DELAYS[$path_idx]}"
     done
   done
 else
@@ -248,7 +263,7 @@ else
   for lang in "${LANGUAGES[@]}"; do
     switch_language "$lang"
     for path_idx in "${!PATHS[@]}"; do
-      capture_screenshot "$lang" "${PATHS[$path_idx]}" "${PATH_INDICES[$path_idx]}"
+      capture_screenshot "$lang" "${PATHS[$path_idx]}" "${PATH_INDICES[$path_idx]}" "${PATH_DELAYS[$path_idx]}"
     done
   done
 fi

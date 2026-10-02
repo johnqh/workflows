@@ -259,7 +259,7 @@ setup_adb_reverse() {
   # All localhost ports from paths.json (URL-encoded or plain)
   if [ -f "$PATHS_JSON" ]; then
     local path_ports
-    path_ports=$(jq -r '.[]' "$PATHS_JSON" 2>/dev/null | grep -oE 'localhost(%3A|:)[0-9]+' | grep -oE '[0-9]+$' || true)
+    path_ports=$(jq -r '.[] | if type == "string" then . else .path end' "$PATHS_JSON" 2>/dev/null | grep -oE 'localhost(%3A|:)[0-9]+' | grep -oE '[0-9]+$' || true)
     [ -n "$path_ports" ] && ports="$ports"$'\n'"$path_ports"
   fi
 
