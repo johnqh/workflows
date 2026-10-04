@@ -133,7 +133,14 @@ run_with_timeout() {
     "$@" &
     local pid=$!
     (
-        sleep "$seconds"
+        # The watchdog runs inside command substitutions for git push and AI
+        # messages. Kill its timer too, or the orphaned sleep keeps the output
+        # pipe open until the full timeout expires.
+        local timer_pid
+        trap 'kill "$timer_pid" 2>/dev/null || true' EXIT
+        sleep "$seconds" &
+        timer_pid=$!
+        wait "$timer_pid" || exit 0
         if kill -0 "$pid" 2>/dev/null; then
             kill_process_tree "$pid"
         fi
