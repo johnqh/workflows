@@ -179,14 +179,12 @@ pm_install() {
                     # This is the dominant failure in a publish cascade: each
                     # publish immediately stales the cache for the next consumer.
                     # Waiting cannot fix it because nothing is propagating, so
-                    # clear and retry before the heavier npm fallback.
+                    # clear and retry once; never mix package managers.
                     log_warning "bun add failed; clearing bun manifest cache and retrying"
                     bun pm cache rm >/dev/null 2>&1 || true
                     if ! bun add "${packages[@]}"; then
-                        log_warning "bun add still failing; retrying dependency update via npm install fallback"
-                        npm install "${packages[@]}" --save-exact=false --legacy-peer-deps
-                        rm -f package-lock.json
-                        bun install
+                        log_error "bun add failed after clearing the Bun manifest cache; stopping without invoking npm"
+                        return 1
                     fi
                 fi
             fi
