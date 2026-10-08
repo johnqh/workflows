@@ -1,6 +1,6 @@
 #!/bin/bash
 
-PUSH_PROJECTS_VERSION="1.5.0"
+PUSH_PROJECTS_VERSION="1.5.1"
 
 # push_projects.sh - Reusable script to update, validate, version bump, and push projects
 #
@@ -31,6 +31,8 @@ PUSH_PROJECTS_VERSION="1.5.0"
 #   NPM_PUBLISH_POLL_MAX       Seconds to wait for a publish to appear on npm
 #                              (default 600). A ceiling, not a duration.
 #   NPM_PUBLISH_POLL_INTERVAL  Seconds between registry checks (default 5).
+#   BUN_ADD_RETRIES            Retries of a failed `bun add` (default 4).
+#   BUN_ADD_RETRY_DELAY        Seconds before each retry (default 15).
 #
 # Note on "wait_after_seconds": since v1.2.0 this is no longer how long the
 # script sleeps. After a project publishes, the script polls npm for the exact
@@ -72,6 +74,11 @@ GIT_OPERATION_TIMEOUT=120
 # Failure tracking (used with --continue-on-error)
 declare -a FAILED_PROJECTS=()
 declare -a FAILED_REASONS=()
+
+# A failed `bun add` (usually a just-published version the registry does not
+# serve to bun yet) is retried this many times, this many seconds apart.
+BUN_ADD_RETRIES="${BUN_ADD_RETRIES:-4}"
+BUN_ADD_RETRY_DELAY="${BUN_ADD_RETRY_DELAY:-15}"
 
 # Package manager for current project (detected per-project)
 PKG_MANAGER=""
@@ -172,21 +179,24 @@ pm_install() {
             if [ ${#packages[@]} -eq 0 ]; then
                 bun install
             else
-                if ! bun add "${packages[@]}"; then
-                    # A stale bun manifest cache reports
-                    #   No version matching "^X.Y.Z" found ... (but package exists)
-                    # for versions that ARE published -- `npm view` confirms them.
-                    # This is the dominant failure in a publish cascade: each
-                    # publish immediately stales the cache for the next consumer.
-                    # Waiting cannot fix it because nothing is propagating, so
-                    # clear and retry once; never mix package managers.
-                    log_warning "bun add failed; clearing bun manifest cache and retrying"
-                    bun pm cache rm >/dev/null 2>&1 || true
-                    if ! bun add "${packages[@]}"; then
-                        log_error "bun add failed after clearing the Bun manifest cache; stopping without invoking npm"
+                # "No version matching "^X.Y.Z" found ... (but package exists)"
+                # has two causes in a publish cascade, and each attempt below
+                # handles both: bun's packument cache is stale (cleared before
+                # every retry), or the registry's abbreviated metadata, which
+                # bun reads, lags the full document that `npm view` reads by a
+                # few seconds right after a publish (only waiting fixes that).
+                # Never mix package managers.
+                local attempt=1
+                until bun add "${packages[@]}"; do
+                    if [ "$attempt" -gt "$BUN_ADD_RETRIES" ]; then
+                        log_error "bun add failed after $BUN_ADD_RETRIES retries; stopping without invoking npm"
                         return 1
                     fi
-                fi
+                    log_warning "bun add failed; clearing bun manifest cache and retrying in ${BUN_ADD_RETRY_DELAY}s (retry $attempt/$BUN_ADD_RETRIES)"
+                    bun pm cache rm >/dev/null 2>&1 || true
+                    sleep "$BUN_ADD_RETRY_DELAY"
+                    attempt=$((attempt + 1))
+                done
             fi
             ;;
         pnpm)
