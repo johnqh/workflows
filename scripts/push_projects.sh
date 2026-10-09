@@ -297,6 +297,30 @@ pm_exec() {
     esac
 }
 
+# A shell path as the JavaScript runtime can open it.
+#
+# Under Git Bash on Windows a path reads /c/Users/..., which bun and node — native
+# Windows programs — resolve as C:\c\Users\..., so require() and writeFileSync()
+# on it fail. cygpath -m gives C:/Users/..., which both resolve, and which needs
+# no escaping inside a quoted JavaScript string. Elsewhere it is the path as is.
+js_path() {
+    if command -v cygpath >/dev/null 2>&1; then
+        cygpath -m "$1"
+    else
+        printf '%s' "$1"
+    fi
+}
+
+# In-place sed with either sed: BSD (macOS) takes the backup suffix as a
+# separate argument, GNU (Linux, Git Bash) reads `-i ''` as the script.
+sed_inplace() {
+    if sed --version >/dev/null 2>&1; then
+        sed -i "$@"
+    else
+        sed -i '' "$@"
+    fi
+}
+
 # Bump version using package manager
 pm_version_bump() {
     case "$PKG_MANAGER" in
@@ -426,7 +450,7 @@ get_sudobility_packages() {
     fi
 
     bun -e "
-        const pkg = require('$pkg_json');
+        const pkg = require('$(js_path "$pkg_json")');
         const deps = { ...pkg.dependencies, ...pkg.devDependencies };
         const sudobility = Object.keys(deps).filter(k => k.startsWith('@sudobility/'));
         console.log(sudobility.join(' '));
@@ -442,7 +466,7 @@ get_sudobility_peer_packages() {
     fi
 
     bun -e "
-        const pkg = require('$pkg_json');
+        const pkg = require('$(js_path "$pkg_json")');
         const peers = pkg.peerDependencies || {};
         const sudobility = Object.keys(peers).filter(k => k.startsWith('@sudobility/'));
         console.log(sudobility.join(' '));
@@ -457,10 +481,10 @@ update_peer_dependency() {
 
     bun -e "
         const fs = require('fs');
-        const pkg = require('$pkg_json');
+        const pkg = require('$(js_path "$pkg_json")');
         if (pkg.peerDependencies && pkg.peerDependencies['$package_name']) {
             pkg.peerDependencies['$package_name'] = '$new_version';
-            fs.writeFileSync('$pkg_json', JSON.stringify(pkg, null, 2) + '\n');
+            fs.writeFileSync('$(js_path "$pkg_json")', JSON.stringify(pkg, null, 2) + '\n');
             console.log('updated');
         }
     " 2>/dev/null
@@ -537,7 +561,7 @@ published_package_id() {
 
     bun -e "
         try {
-            const pkg = require('$pkg_json');
+            const pkg = require('$(js_path "$pkg_json")');
             if (pkg.private) process.exit(0);
             if (!pkg.name || !pkg.version) process.exit(0);
             console.log(pkg.name + '@' + pkg.version);
@@ -647,7 +671,7 @@ update_sudobility_deps() {
     local cleaned_file_refs
     cleaned_file_refs=$(bun -e "
         const fs = require('fs');
-        const pkg = require('$pkg_json');
+        const pkg = require('$(js_path "$pkg_json")');
         let changed = false;
         for (const field of ['overrides', 'resolutions']) {
             if (!pkg[field]) continue;
@@ -662,7 +686,7 @@ update_sudobility_deps() {
             }
         }
         if (changed) {
-            fs.writeFileSync('$pkg_json', JSON.stringify(pkg, null, 2) + '\n');
+            fs.writeFileSync('$(js_path "$pkg_json")', JSON.stringify(pkg, null, 2) + '\n');
             console.log('cleaned');
         }
     " 2>/dev/null)
@@ -674,7 +698,7 @@ update_sudobility_deps() {
     # Read all @sudobility package names and current versions in one node call
     local deps_info
     deps_info=$(bun -e "
-        const pkg = require('$pkg_json');
+        const pkg = require('$(js_path "$pkg_json")');
         const deps = { ...pkg.dependencies, ...pkg.devDependencies };
         const peers = pkg.peerDependencies || {};
         const lines = [];
@@ -830,7 +854,7 @@ read_package_scripts() {
     fi
     local result
     result=$(bun -e "
-        const s = require('$pkg_json').scripts || {};
+        const s = require('$(js_path "$pkg_json")').scripts || {};
         const f = [
             s.build ? 'yes' : 'no',
             s.clean ? 'yes' : 'no',
@@ -1155,7 +1179,7 @@ is_react_native_app() {
     fi
 
     local has_rn_dep
-    has_rn_dep=$(bun -e "const d=require('$pkg_json').dependencies||{};console.log(d['react-native']?'yes':'no')" 2>/dev/null) || has_rn_dep="no"
+    has_rn_dep=$(bun -e "const d=require('$(js_path "$pkg_json")').dependencies||{};console.log(d['react-native']?'yes':'no')" 2>/dev/null) || has_rn_dep="no"
     [ "$has_rn_dep" = "yes" ]
 }
 
@@ -1175,14 +1199,14 @@ sync_rn_native_versions() {
     local ios_pbxproj
     ios_pbxproj=$(find "$project_dir/ios" -name "project.pbxproj" -not -path "*/Pods/*" -maxdepth 3 2>/dev/null | head -1)
     if [ -n "$ios_pbxproj" ] && [ -f "$ios_pbxproj" ]; then
-        sed -i '' "s/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = $version;/g" "$ios_pbxproj"
+        sed_inplace "s/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = $version;/g" "$ios_pbxproj"
         log_info "  Updated iOS MARKETING_VERSION"
     fi
 
     # Android: update versionName in build.gradle
     local android_gradle="$project_dir/android/app/build.gradle"
     if [ -f "$android_gradle" ]; then
-        sed -i '' "s/versionName \"[^\"]*\"/versionName \"$version\"/" "$android_gradle"
+        sed_inplace "s/versionName \"[^\"]*\"/versionName \"$version\"/" "$android_gradle"
         log_info "  Updated Android versionName"
     fi
 
@@ -1190,7 +1214,7 @@ sync_rn_native_versions() {
     local macos_pbxproj
     macos_pbxproj=$(find "$project_dir/macos" -name "project.pbxproj" -not -path "*/Pods/*" -maxdepth 3 2>/dev/null | head -1)
     if [ -n "$macos_pbxproj" ] && [ -f "$macos_pbxproj" ]; then
-        sed -i '' "s/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = $version;/g" "$macos_pbxproj"
+        sed_inplace "s/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = $version;/g" "$macos_pbxproj"
         log_info "  Updated macOS MARKETING_VERSION"
     fi
 
@@ -1210,7 +1234,7 @@ sync_rn_native_versions() {
         # `Version="..."` also matches the tail of `MinVersion="..."` on the
         # TargetDeviceFamily lines, which overwrote the minimum Windows version
         # with the app version on every release.
-        sed -i '' "s/\([[:space:]]\)Version=\"[0-9]*\.[0-9]*\.[0-9]*\.[0-9]*\"/\1Version=\"$version.0\"/" "$windows_manifest"
+        sed_inplace "s/\([[:space:]]\)Version=\"[0-9]*\.[0-9]*\.[0-9]*\.[0-9]*\"/\1Version=\"$version.0\"/" "$windows_manifest"
         log_info "  Updated Windows Package.appxmanifest"
     fi
 }
@@ -1295,7 +1319,14 @@ bump_version() {
     log_info "Bumping patch version..."
 
     if pm_version_bump >/dev/null 2>&1; then
-        local new_version=$(bun -e "console.log(require('$pkg_json').version)")
+        # Assigned apart from `local`, whose own status would hide a failed
+        # read — and an empty version would be written to every native file.
+        local new_version
+        new_version=$(bun -e "console.log(require('$(js_path "$pkg_json")').version)") || new_version=""
+        if [ -z "$new_version" ]; then
+            log_error "Version bumped, but it could not be read back from $pkg_json"
+            return 1
+        fi
         log_success "Version bumped to $new_version"
         sync_rn_native_versions "$project_dir" "$new_version"
         return 0
@@ -1705,7 +1736,7 @@ process_project() {
     # Auto-format TypeScript projects after dependency updates to fix prettier drift
     if [ "$PKG_MANAGER" != "python" ] && [ -f "$project_path/package.json" ]; then
         local has_format_script
-        has_format_script=$(bun -e "const s=require('$project_path/package.json').scripts||{};console.log(s.format?'yes':'no')" 2>/dev/null) || has_format_script="no"
+        has_format_script=$(bun -e "const s=require('$(js_path "$project_path/package.json")').scripts||{};console.log(s.format?'yes':'no')" 2>/dev/null) || has_format_script="no"
         if [ "$has_format_script" = "yes" ]; then
             log_info "Running format..."
             (cd "$project_path" && pm_run format) 2>&1 || true
