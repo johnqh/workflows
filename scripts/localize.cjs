@@ -150,7 +150,7 @@ console.log(`Max retries: ${maxRetries}`);
 console.log('='.repeat(60));
 
 // List of target languages and their directory names
-// Maps our i18n language codes to DeepL API language codes
+// Maps our i18n language codes to target language codes
 const languages = {
   de: 'DE', // German
   es: 'ES', // Spanish
@@ -161,24 +161,15 @@ const languages = {
   pt: 'PT', // Portuguese
   ru: 'RU', // Russian
   sv: 'SV', // Swedish
-  th: 'TH', // Thai (DeepL supports this)
+  th: 'TH', // Thai
   uk: 'UK', // Ukrainian
-  vi: 'VI', // Vietnamese (DeepL supports this)
+  vi: 'VI', // Vietnamese
   zh: 'ZH', // Chinese (Simplified)
   'zh-hant': 'ZH-HANT', // Chinese (Traditional)
 };
 
 // Helper function to add a delay
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-
-// Your DeepL API key
-const DEEPL_API_KEY = process.env.VITE_APP_DEEPL_API_KEY;
-
-if (!DEEPL_API_KEY) {
-  console.error('Error: DEEPL_API_KEY environment variable not set.');
-  console.error('Please set VITE_APP_DEEPL_API_KEY in your .env file.');
-  process.exit(1);
-}
 
 // LM Studio Server configuration
 const LM_STUDIO_URL = `http://${llmHost}:${llmPort}/v1`;
@@ -284,8 +275,8 @@ Output: The phrase translated to ${targetLanguage}, keeping <xx>MetaMask</xx> un
       return translateWithLMStudio(text, langCode, retryCount + 1);
     }
 
-    console.error(`     Max retries reached. Throwing error to trigger DeepL fallback.`);
-    throw error; // Throw error to trigger fallback to DeepL
+    console.error(`     Max retries reached; keeping the original text.`);
+    throw error; // bubble up so the caller keeps the original text
   }
 }
 
@@ -366,58 +357,16 @@ async function translateWithPlaceholders(text, langCode, keyName = '', retryCoun
     translatedText = translatedText.replace(regex, match => `<xx>${match}</xx>`);
   });
 
-  // Always try LM Studio first for all strings
+  // Translate with LM Studio; if it fails, keep the original English text
   try {
     translatedText = await translateWithLMStudio(translatedText, langCode);
   } catch (lmError) {
+    const langName = languageNames[langCode] || langCode;
     console.warn(
-      `  LM Studio failed, falling back to DeepL for: "${text.substring(0, 50)}..."`
+      `  [WARN] LM Studio failed for key "${keyName}" (language: ${langName}). ` +
+        `Keeping original English text. Error: ${lmError.message}`
     );
-    // Fallback to DeepL if LM Studio fails
-    try {
-      const hasPlaceholders = translatedText.includes('<xx>');
-
-      if (hasPlaceholders) {
-        // Use DeepL with XML tag handling for strings with placeholders
-        const response = await axios.post(
-          'https://api-free.deepl.com/v2/translate',
-          new URLSearchParams({
-            auth_key: DEEPL_API_KEY,
-            text: translatedText,
-            source_lang: 'EN',
-            target_lang: langCode,
-            tag_handling: 'xml',
-            ignore_tags: 'xx',
-          }),
-          {
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          }
-        );
-        translatedText = response.data.translations[0].text;
-      } else {
-        // Use DeepL without tag handling for simple strings
-        const response = await axios.post(
-          'https://api-free.deepl.com/v2/translate',
-          new URLSearchParams({
-            auth_key: DEEPL_API_KEY,
-            text: translatedText,
-            source_lang: 'EN',
-            target_lang: langCode,
-          }),
-          {
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          }
-        );
-        translatedText = response.data.translations[0].text;
-      }
-    } catch (deeplError) {
-      const langName = languageNames[langCode] || langCode;
-      console.warn(
-        `  [WARN] Both LM Studio and DeepL failed for key "${keyName}" (language: ${langName}). ` +
-        `Keeping original English text. LM Studio error: ${lmError.message}; DeepL error: ${deeplError.message}`
-      );
-      // translatedText still contains the original (with <xx> markers), which will be cleaned below
-    }
+    // translatedText still contains the original (with <xx> markers), which will be cleaned below
   }
 
   // Restore placeholders in the translated text
