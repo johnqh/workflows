@@ -14,6 +14,10 @@
  * so no API key of any kind ends up in the committed file. Everything else in
  * `.env` (local-only tooling, etc.) is ignored entirely.
  *
+ * Localhost: a `localhost`/dev value is never written. If a real value is
+ * already in the output file (hand-set or from a previous run) it is preserved;
+ * otherwise the key is listed in the header as NOT SET for production.
+ *
  * Why `.env.production` (not a wrangler file): `VITE_*` vars are consumed at
  * BUILD time. A wrangler `[vars]` block is runtime-only and never reaches
  * `vite build`, so it cannot replace these. Vite auto-loads `.env.production`
@@ -94,6 +98,14 @@ function parseEnvMap(file: string | undefined): Map<string, string> {
 const overrides = parseEnvMap(overridePath);
 let overridesApplied = 0;
 
+/**
+ * Values already in the output file. A `localhost`/dev value is never written;
+ * if a real (non-localhost) value was set here before -- by hand or a previous
+ * run -- it is preserved, so production edits survive regeneration.
+ */
+const existing = parseEnvMap(outPath);
+const isLocalhost = (v: string) => /localhost/i.test(v);
+
 /** Credential-looking names are NEVER written -- keep them in the dashboard. */
 const CREDENTIAL = /(SECRET|TOKEN|PASSWORD|PRIVATE|CREDENTIAL|API_KEY|APIKEY|ACCESS_KEY)/i;
 /** ...except these, which are public by design (Firebase client config + opt-ins). */
@@ -128,6 +140,7 @@ function hasValue(rawValue: string): boolean {
 
 const included: Entry[] = [];
 const notWritten: string[] = []; // have a value in .env but intentionally left out
+const notSet: string[] = []; // only a localhost/dev value, no production value yet
 
 for (const rawLine of readFileSync(sourcePath, 'utf8').split('\n')) {
   const line = rawLine.trim();
@@ -152,12 +165,25 @@ for (const rawLine of readFileSync(sourcePath, 'utf8').split('\n')) {
   const isBlocked =
     extraExcludes.has(key) || (CREDENTIAL.test(key) && !isAllowedCredential(key));
 
-  if (isCandidate && !isBlocked) {
-    included.push({ key, value });
-  } else {
+  if (!isCandidate || isBlocked) {
     // Has a value in .env but not written here (wrong prefix, or a credential).
     notWritten.push(key);
+    continue;
   }
+
+  // Never write a localhost/dev value. Keep a real value already in the output
+  // file; otherwise flag the key as not set for production.
+  if (isLocalhost(value)) {
+    const prior = existing.get(key);
+    if (prior !== undefined && !isLocalhost(prior)) {
+      included.push({ key, value: prior });
+    } else {
+      notSet.push(key);
+    }
+    continue;
+  }
+
+  included.push({ key, value });
 }
 
 /**
@@ -196,6 +222,15 @@ if (notWritten.length) {
   );
 }
 
+if (notSet.length) {
+  header.push(
+    '#',
+    '# NOT SET for production (only a localhost/dev value in .env). Set a real',
+    '# value in the Cloudflare build variables, or add it here by hand:',
+    ...notSet.map((k) => `#   ${k}`),
+  );
+}
+
 header.push('# ---------------------------------------------------------------------------', '');
 
 const body = included.map(({ key, value }) => `${key}=${quote(value)}`).join('\n');
@@ -213,6 +248,12 @@ if (overridePath && overridesApplied) {
 if (notWritten.length) {
   console.log('Have a value in .env but NOT written (kept for Cloudflare / local only):');
   for (const k of notWritten) console.log(`  • ${k}`);
+  console.log('');
+}
+
+if (notSet.length) {
+  console.log('NOT SET for production (only a localhost/dev value, no production value yet):');
+  for (const k of notSet) console.log(`  • ${k}`);
   console.log('');
 }
 
