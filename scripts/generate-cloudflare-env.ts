@@ -35,9 +35,14 @@
  *                    for credential-looking keys that ARE safe to commit, on top
  *                    of the built-in `FIREBASE` allowance (its client apiKey is
  *                    public by design). e.g. CF_ENV_ALLOW=PUBLISHABLE
+ *   CF_ENV_OVERRIDES Path to a shared values file. Default: ~/.keys, then
+ *                    ~/.keys.txt. For any key also present in the source .env,
+ *                    this file's value wins -- so common cross-project values
+ *                    can be centralized and left blank in each project's .env.
  */
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { resolve, join } from 'node:path';
+import { homedir } from 'node:os';
 
 const sourcePath = resolve(process.cwd(), process.argv[2] ?? '.env');
 const outPath = resolve(process.cwd(), process.argv[3] ?? '.env.production');
@@ -58,6 +63,36 @@ const extraExcludes = new Set(
     .map((k) => k.trim())
     .filter(Boolean),
 );
+
+/**
+ * Overrides file (default ~/.keys, then ~/.keys.txt): shared cross-project
+ * values. When a key in the source .env also has a value here, the value from
+ * here wins -- so common vars can be centralized and left blank in each .env.
+ * Only keys already declared in .env are considered, so secrets that live only
+ * in this file (e.g. CLOUDFLARE_API_KEY) are never pulled into the output.
+ */
+const overridePath =
+  (process.env.CF_ENV_OVERRIDES ? resolve(process.env.CF_ENV_OVERRIDES) : undefined) ??
+  [join(homedir(), '.keys'), join(homedir(), '.keys.txt')].find((p) => existsSync(p));
+
+function parseEnvMap(file: string | undefined): Map<string, string> {
+  const map = new Map<string, string>();
+  if (!file || !existsSync(file)) return map;
+  for (const raw of readFileSync(file, 'utf8').split('\n')) {
+    let line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    if (line.startsWith('export ')) line = line.slice(7).trim();
+    const eq = line.indexOf('=');
+    if (eq === -1) continue;
+    const key = line.slice(0, eq).trim();
+    const val = line.slice(eq + 1).trim();
+    if (key && hasValue(val)) map.set(key, val);
+  }
+  return map;
+}
+
+const overrides = parseEnvMap(overridePath);
+let overridesApplied = 0;
 
 /** Credential-looking names are NEVER written -- keep them in the dashboard. */
 const CREDENTIAL = /(SECRET|TOKEN|PASSWORD|PRIVATE|CREDENTIAL|API_KEY|APIKEY|ACCESS_KEY)/i;
@@ -102,10 +137,15 @@ for (const rawLine of readFileSync(sourcePath, 'utf8').split('\n')) {
   if (eq === -1) continue; // not a KEY=VALUE line
 
   const key = line.slice(0, eq).trim();
-  const value = line.slice(eq + 1); // keep value verbatim (may contain '=')
+  const envValue = line.slice(eq + 1); // keep value verbatim (may contain '=')
   if (!key) continue;
 
-  // Skip keys with no value -- don't emit empty `KEY=''`, don't list them.
+  // Prefer the shared overrides file (~/.keys) when it has a value for this key.
+  const override = overrides.get(key);
+  if (override !== undefined) overridesApplied++;
+  const value = override ?? envValue;
+
+  // Skip keys with no value (in .env or overrides) -- don't emit empty `KEY=''`.
   if (!hasValue(value)) continue;
 
   const isCandidate = prefixes.some((p) => key.startsWith(p)) || extraIncludes.has(key);
@@ -131,8 +171,12 @@ function quote(value: string): string {
     (v.startsWith('"') && v.endsWith('"') && v.length >= 2) ||
     (v.startsWith("'") && v.endsWith("'") && v.length >= 2)
   ) {
-    return v;
+    return v; // already quoted in the source -- leave as-is
   }
+  // Leave simple values bare (matches hand-written .env style). Only values
+  // with whitespace or shell-special chars are quoted, so the file stays safe
+  // for Vite's parser and for `set -a && . ./.env.production`.
+  if (/^[A-Za-z0-9_.:/@%+,-]+$/.test(v)) return v;
   // Single quotes = literal in both bash and dotenv; escape embedded quotes.
   return `'${v.replace(/'/g, `'\\''`)}'`;
 }
@@ -161,6 +205,10 @@ console.log(
   `✓ Wrote ${included.length} public vars to ${outPath} ` +
     `(prefix: ${prefixes.join(', ')}; ${notWritten.length} other keys noted in the header)\n`,
 );
+
+if (overridePath && overridesApplied) {
+  console.log(`Applied ${overridesApplied} value override(s) from ${overridePath}\n`);
+}
 
 if (notWritten.length) {
   console.log('Have a value in .env but NOT written (kept for Cloudflare / local only):');
