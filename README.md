@@ -33,8 +33,6 @@ on:
 jobs:
   cicd:
     uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
-    with:
-      npm-access: "restricted"  # or "public"
     secrets:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
@@ -99,7 +97,6 @@ jobs:
     uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
     with:
       docker-image-name: "wildduck"
-      npm-access: "restricted"
     secrets:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -131,7 +128,7 @@ jobs:
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `npm-access` | string | No | `restricted` | NPM package access: `public` or `restricted` (only used if `NPM_TOKEN` is set) |
+| `npm-access` | string | No | `restricted` | **Deprecated / ignored.** Package access now comes from each package's `publishConfig.access` in `package.json`; the publish step no longer passes `--access`. Safe to delete from `ci-cd.yml`. |
 | `skip-npm-publish` | boolean | No | `false` | Skip NPM publishing even if `NPM_TOKEN` is configured (useful for apps that need `NPM_TOKEN` only for private dependencies) |
 | `notification-email` | string | No | `""` | Email address to notify on test failures (only used for `develop` branch) |
 | `node-version` | string | No | `22.x` | Node.js version to use |
@@ -207,23 +204,21 @@ You can deploy to multiple targets simultaneously! For example:
 
 ## NPM Package Access
 
-### Public Packages
+Package visibility is controlled by each package's **`publishConfig.access`** in its
+`package.json` — the single source of truth. The publish step runs `npm publish`
+without `--access`, so npm honors that field.
 
-Use `npm-access: "public"` for open-source libraries:
-
-```yaml
-with:
-  npm-access: "public"
+```jsonc
+// package.json
+{
+  "publishConfig": { "access": "public" }   // or "restricted"
+}
 ```
 
-### Restricted Packages (Default)
-
-Use `npm-access: "restricted"` for private packages:
-
-```yaml
-with:
-  npm-access: "restricted"
-```
+> Note: npm locks a scoped package's visibility at its **first** publish — changing
+> `publishConfig.access` afterward does not change an already-published package.
+> The old `npm-access` workflow input is **deprecated and ignored**; you can remove
+> it from your `ci-cd.yml`.
 
 ### Skip NPM Publishing (Apps Only)
 
@@ -355,16 +350,12 @@ Your project should have these npm scripts:
 
 ### design_system (Public Library)
 ```yaml
-with:
-  npm-access: "public"
 secrets:
   NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
 
 ### di, types (Restricted Library)
 ```yaml
-with:
-  npm-access: "restricted"
 secrets:
   NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
@@ -383,7 +374,6 @@ secrets:
 ```yaml
 with:
   docker-image-name: "wildduck"
-  npm-access: "restricted"
 secrets:
   NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
   DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}

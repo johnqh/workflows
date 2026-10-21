@@ -24,7 +24,5 @@ permissions:
 jobs:
   cicd:
     uses: johnqh/workflows/.github/workflows/unified-cicd.yml@v1
-    with:
-      npm-access: "restricted"
     secrets:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

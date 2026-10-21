@@ -284,8 +284,6 @@ permissions: { contents: write, id-token: write, deployments: write }
 jobs:
   cicd:
     uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
-    with:
-      npm-access: "public"
     secrets:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
