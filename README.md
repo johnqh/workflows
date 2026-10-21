@@ -173,7 +173,10 @@ Always runs:
 ### When NPM_TOKEN is set
 
 Automatically runs:
-- 📦 Publishes to NPM (if version changed)
+- 📦 Publishes to NPM (if version changed) via **OIDC Trusted Publishing** — the
+  publish step uses **no token**; a trusted publisher must be configured per package
+  (see *Secret rotation & OIDC trusted publishing*). The `NPM_TOKEN` secret is
+  **read-only** and is used only to install private `@sudobility/*` dependencies.
 - 🏷️ Creates GitHub release with tag
 
 ### When PYPI_TOKEN is set
@@ -409,9 +412,12 @@ secrets:
 
 ### NPM publish fails with 403
 
-- Ensure `NPM_TOKEN` is set in repository secrets
-- Check that token has publish permissions
-- Verify package name matches @sudobility scope
+- Publishing uses **OIDC Trusted Publishing**: ensure a trusted publisher is
+  configured for the package on npmjs.com, pointing at `johnqh/<repo>` + workflow
+  `ci-cd.yml` (run `scripts/verify-trusted-publishers.sh`). The `NPM_TOKEN` secret
+  is read-only and **cannot** publish.
+- Confirm the publish job has `permissions: id-token: write` and runs npm ≥ 11.5.1
+- Verify the package name matches the `@sudobility` scope
 
 ### Docker build fails
 
@@ -437,6 +443,63 @@ secrets:
 - The workflow gracefully handles missing scripts
 - Warning messages are shown but don't fail the build
 - Add the scripts to `package.json` to enable checks
+
+## Secret rotation & OIDC trusted publishing
+
+The ecosystem publishes with **OIDC Trusted Publishing** (no long-lived publish
+token). The `NPM_TOKEN` secret is a **read-only** token used only to install private
+`@sudobility/*` dependencies during builds. The `scripts/` helpers below manage this
+across every repo/project. They read credentials from local files at runtime (never
+committing or printing them) and are safe to re-run. Each takes an optional
+`[projects_dir]` argument, defaulting to this repo's parent (the monorepo root).
+
+**Prerequisites**
+- `gh` authenticated with `repo` scope (`gh auth status`) — for GitHub secrets.
+- The read-only npm token in `~/.npmrc` (`_authToken=…`) — the value pushed to CI.
+- Cloudflare credentials in a key file (search order: `$CF_KEYFILE`,
+  `~/.develop/.keys`, `~/.keys`, `~/.keys.txt`, `~/.private_keys`):
+  `CLOUDFLARE_API_TOKEN`, or `CLOUDFLARE_API_KEY` + `CLOUDFLARE_EMAIL` (Global API Key).
+- npm ≥ 11.5.1 and `npm login` with a **2FA-capable** account — for trusted publishing.
+
+### scripts/rotate-npm-token-github.sh
+Sets the `NPM_TOKEN` Actions secret on every `johnqh/*` repo to the token in
+`~/.npmrc` (piped straight into `gh secret set`, never printed).
+```bash
+scripts/rotate-npm-token-github.sh
+```
+
+### scripts/rotate-npm-token-cloudflare.py
+Rotates `NPM_TOKEN` in Cloudflare **Pages** env vars (production + preview) to the
+`~/.npmrc` token, stored as an encrypted `secret_text`. It PATCHes only the single
+`NPM_TOKEN` key (Cloudflare merges by key), snapshots each environment before, and
+re-verifies afterwards that no other variable was removed or changed — stopping and
+printing the originals if anything is off. Workers are intentionally untouched
+(`NPM_TOKEN` is build-time only). `DRY_RUN=1` previews without writing.
+```bash
+DRY_RUN=1 python3 scripts/rotate-npm-token-cloudflare.py   # preview
+python3 scripts/rotate-npm-token-cloudflare.py             # apply
+```
+
+### scripts/setup-trusted-publishers.sh
+Bulk-configures npm Trusted Publishers (GitHub Actions, caller workflow `ci-cd.yml`)
+for every publishable `@sudobility/*` package via `npm trust github`. npm **requires
+interactive 2FA** for this and forbids bypass-2FA tokens, so run it yourself after
+`npm login`; on the first package, click "skip 2FA for the next 5 minutes" on the npm
+website so the rest proceed unattended (~80 per window). Re-running skips packages
+already configured. `DRY_RUN=1` previews; `MAX=N` limits the count.
+```bash
+npm login
+DRY_RUN=1 scripts/setup-trusted-publishers.sh   # preview
+scripts/setup-trusted-publishers.sh             # apply
+```
+
+### scripts/verify-trusted-publishers.sh
+Checks each publishable package with `npm trust list` and reports `OK` / `NONE` /
+`CHECK` / `ERROR`, confirming every package has a trusted publisher pointing at
+`johnqh/<repo>` + `ci-cd.yml`.
+```bash
+scripts/verify-trusted-publishers.sh
+```
 
 ## Workflow Validation
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-PUSH_PROJECTS_VERSION="1.5.1"
+PUSH_PROJECTS_VERSION="1.6.0"
 
 # push_projects.sh - Reusable script to update, validate, version bump, and push projects
 #
@@ -403,6 +403,9 @@ LOGIC:
     5. If changes exist (or --force): bump version, commit, push
        React Native apps (react-native dependency + ios/ or android/)
        are committed and pushed without a version bump, even with --force
+       A brand-new npm library (package not yet on npm, has a ci-cd.yml without
+       skip-npm-publish) is published once INTERACTIVELY (npm login + 2FA)
+       before the push, so CI/OIDC owns every release after that.
     6. If no changes: skip to next package
 
 SUPPORTED PACKAGE MANAGERS:
@@ -1685,6 +1688,92 @@ remove_sudobility_symlinks() {
 }
 
 # Process a single project
+# One-time manual bootstrap for a brand-new npm library.
+#
+# OIDC/CI cannot publish a package that does not yet exist (a trusted publisher
+# cannot be attached until the package exists, and OIDC auth needs the trusted
+# publisher). So the very first publish of a new library is done here, locally
+# and INTERACTIVELY (npm login + 2FA OTP). After this, future releases are
+# published by CI/OIDC on push as usual.
+#
+# No-ops (returns 0, nothing prompted) for: python projects, apps / "private"
+# packages, repos whose ci-cd.yml sets skip-npm-publish: true, repos without a
+# ci-cd.yml (CI doesn't deploy them to npm), and any package already on npm.
+bootstrap_new_npm_package() {
+    local project_dir="$1" project_name="$2"
+
+    [ "$PKG_MANAGER" = "python" ] && return 0
+    local pkg_json="$project_dir/package.json"
+    [ -f "$pkg_json" ] || return 0
+
+    # "CICD marked it should be deployed to NPM": has a ci-cd.yml and does not
+    # opt out via skip-npm-publish.
+    local wf="$project_dir/.github/workflows/ci-cd.yml"
+    [ -f "$wf" ] || return 0
+    grep -Eq '^[[:space:]]*skip-npm-publish:[[:space:]]*true' "$wf" && return 0
+
+    local name priv ver
+    name=$(bun -e "console.log(require('$(js_path "$pkg_json")').name||'')" 2>/dev/null) || name=""
+    priv=$(bun -e "console.log(require('$(js_path "$pkg_json")').private===true)" 2>/dev/null) || priv="false"
+    ver=$(bun -e "console.log(require('$(js_path "$pkg_json")').version||'')" 2>/dev/null) || ver=""
+    [ -n "$name" ] || return 0
+    [ "$priv" = "true" ] && return 0
+
+    # Already on npm? Then CI/OIDC owns future versions; nothing to bootstrap.
+    if [ -n "$(bun info "$name" version 2>/dev/null)" ]; then
+        return 0
+    fi
+
+    local access="restricted" acc
+    acc=$(grep -E '^[[:space:]]*npm-access:' "$wf" | head -1 | sed -E 's/.*npm-access:[[:space:]]*"?([A-Za-z]+)"?.*/\1/' || true)
+    [ "$acc" = "public" ] && access="public"
+
+    local owner_repo
+    owner_repo=$(git -C "$project_dir" remote get-url origin 2>/dev/null | sed -E 's#.*github.com[:/]+##; s#\.git$##' || true)
+
+    log_warning "────────────────────────────────────────────────────────────"
+    log_warning "$name is NOT on npm yet. CI/OIDC cannot create a new package,"
+    log_warning "so it needs a one-time manual publish. This step is INTERACTIVE"
+    log_warning "(npm login + 2FA). The read-only CI token cannot publish."
+    log_warning "────────────────────────────────────────────────────────────"
+
+    # Establish a publish-capable login (the exported read-only NPM_TOKEN can't).
+    if ! npm login </dev/tty; then
+        log_error "npm login failed; cannot bootstrap $name"
+        return 1
+    fi
+
+    # Publish with that login, NOT the read-only ${NPM_TOKEN}: move any
+    # project-local .npmrc aside and clear NPM_TOKEN for the publish only, so npm
+    # authenticates from the user-level login session.
+    local moved=""
+    if [ -f "$project_dir/.npmrc" ]; then
+        mv "$project_dir/.npmrc" "$project_dir/.npmrc.bootstrap.bak"
+        moved="yes"
+    fi
+    log_info "Publishing $name@$ver as $access (first-time; expect an OTP prompt)..."
+    local pub_ok=true
+    ( cd "$project_dir" && env -u NPM_TOKEN npm publish --access "$access" </dev/tty ) || pub_ok=false
+    [ -n "$moved" ] && mv "$project_dir/.npmrc.bootstrap.bak" "$project_dir/.npmrc"
+    if [ "$pub_ok" != true ]; then
+        log_error "First publish of $name failed"
+        return 1
+    fi
+    log_success "Published $name@$ver"
+
+    # Attach the GitHub Actions trusted publisher so CI/OIDC owns future releases.
+    if [ -n "$owner_repo" ]; then
+        log_info "Attaching trusted publisher ($owner_repo, ci-cd.yml)..."
+        if npm trust github "$name" --repo "$owner_repo" --file "ci-cd.yml" --allow-publish --yes </dev/tty; then
+            log_success "Trusted publisher configured — future releases publish via CI/OIDC"
+        else
+            log_warning "Could not attach trusted publisher automatically."
+            log_warning "Run: (cd \"\$(git rev-parse --show-toplevel)\" && npm trust github $name --repo $owner_repo --file ci-cd.yml --allow-publish --yes)"
+        fi
+    fi
+    return 0
+}
+
 process_project() {
     local project_path="$1"
     local project_name=$(basename "$project_path")
@@ -1818,6 +1907,15 @@ process_project() {
             return 1
         fi
         log_success "$PKG_LOCKFILE updated"
+    fi
+
+    # If this is an npm-deployed library that has never been published, create it
+    # once (interactive) before pushing, so the push's CI run sees the version
+    # already on npm and skips publishing instead of failing an OIDC publish on a
+    # package that doesn't exist yet.
+    if ! bootstrap_new_npm_package "$project_path" "$project_name"; then
+        log_error "First-time npm publish failed for $project_name"
+        return 1
     fi
 
     if ! commit_and_push "$project_path" "$project_name"; then

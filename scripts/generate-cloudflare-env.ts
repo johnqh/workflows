@@ -39,8 +39,8 @@
  *                    for credential-looking keys that ARE safe to commit, on top
  *                    of the built-in `FIREBASE` allowance (its client apiKey is
  *                    public by design). e.g. CF_ENV_ALLOW=PUBLISHABLE
- *   CF_ENV_OVERRIDES Path to a shared values file. Default: ~/.keys, then
- *                    ~/.keys.txt. For any key also present in the source .env,
+ *   CF_ENV_OVERRIDES Path to a shared values file. Default: ~/.develop/.keys,
+ *                    then ~/.keys, then ~/.keys.txt. For any key also in the .env,
  *                    this file's value wins -- so common cross-project values
  *                    can be centralized and left blank in each project's .env.
  */
@@ -75,7 +75,7 @@ const extraExcludes = new Set(
 const DEFAULT_EXCLUDE = new Set(['VITE_PRIVY_APP_ID', 'VITE_WALLETCONNECT_PROJECT_ID']);
 
 /**
- * Overrides file (default ~/.keys, then ~/.keys.txt): shared cross-project
+ * Overrides file (default ~/.develop/.keys, then ~/.keys, then ~/.keys.txt): shared cross-project
  * values. When a key in the source .env also has a value here, the value from
  * here wins -- so common vars can be centralized and left blank in each .env.
  * Only keys already declared in .env are considered, so secrets that live only
@@ -83,7 +83,9 @@ const DEFAULT_EXCLUDE = new Set(['VITE_PRIVY_APP_ID', 'VITE_WALLETCONNECT_PROJEC
  */
 const overridePath =
   (process.env.CF_ENV_OVERRIDES ? resolve(process.env.CF_ENV_OVERRIDES) : undefined) ??
-  [join(homedir(), '.keys'), join(homedir(), '.keys.txt')].find((p) => existsSync(p));
+  [join(homedir(), '.develop', '.keys'), join(homedir(), '.keys'), join(homedir(), '.keys.txt')].find(
+    (p) => existsSync(p),
+  );
 
 function parseEnvMap(file: string | undefined): Map<string, string> {
   const map = new Map<string, string>();

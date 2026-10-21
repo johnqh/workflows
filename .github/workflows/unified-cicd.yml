@@ -687,6 +687,21 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # Publishing uses OIDC Trusted Publishing, not a long-lived token. npm's
+      # token here is read-only (installs private deps) and CANNOT publish, so
+      # the token-based .npmrc written by the install steps must be cleared
+      # before `npm publish`, or npm would try the read-only token and 403.
+      # Trusted publisher is matched by npm against the CALLER workflow
+      # (ci-cd.yml in each package repo) — configure it per package on npmjs.com.
+      - name: "Prepare npm for OIDC trusted publishing"
+        if: steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true'
+        run: |
+          # Trusted publishing requires npm >= 11.5.1; Node 22 ships npm 10.x.
+          npm install -g npm@latest
+          echo "npm $(npm --version)"
+          # Remove token-based auth so `npm publish` performs the OIDC exchange.
+          rm -f .npmrc "$HOME/.npmrc"
+
       - name: "Publish to NPM"
         if: steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true'
         run: |
@@ -695,7 +710,7 @@ jobs:
           else
             ACCESS="restricted"
           fi
-          echo "📦 Publishing as $ACCESS package"
+          echo "📦 Publishing as $ACCESS package (OIDC trusted publishing)"
 
           # The pre-check can miss a version published moments earlier: the
           # registry read path is CDN-cached, so a just-published version stays
@@ -716,8 +731,8 @@ jobs:
           fi
         env:
           NPM_ACCESS: ${{ inputs.npm-access }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # No NODE_AUTH_TOKEN / NPM_TOKEN here: authentication is via OIDC
+          # trusted publishing (id-token: write is already granted on this job).
 
       - name: "Notify deployment success"
         if: success() && steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true'
