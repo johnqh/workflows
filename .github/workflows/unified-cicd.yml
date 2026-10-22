@@ -699,8 +699,21 @@ jobs:
           # Trusted publishing requires npm >= 11.5.1; Node 22 ships npm 10.x.
           npm install -g npm@latest
           echo "npm $(npm --version)"
-          # Remove token-based auth so `npm publish` performs the OIDC exchange.
+          # Force the OIDC path. npm must NOT find the read-only NPM_TOKEN at
+          # publish time: a 2FA-bypass token's direct publish is now *staged*
+          # (deferred for 2FA), not completed, which strands the version
+          # (E409 "previously staged" on any retry; never promoted to the
+          # registry). The token reaches npm two ways we have to kill here:
+          #   1. The .npmrc files the install steps wrote.
+          #   2. setup-node's own .npmrc at $NPM_CONFIG_USERCONFIG, which holds
+          #      //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}.
+          # We remove (1) and, in the publish step, point npm at a clean,
+          # token-free userconfig and drop NODE_AUTH_TOKEN from the env, so the
+          # only credential left is the GitHub OIDC id-token.
           rm -f .npmrc "$HOME/.npmrc"
+          CLEAN_NPMRC="$RUNNER_TEMP/.npmrc-oidc"
+          printf 'registry=https://registry.npmjs.org/\n' > "$CLEAN_NPMRC"
+          echo "CLEAN_NPMRC=$CLEAN_NPMRC" >> "$GITHUB_ENV"
 
       - name: "Publish to NPM"
         if: steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true'
@@ -716,19 +729,40 @@ jobs:
           # registry read path is CDN-cached, so a just-published version stays
           # invisible to `npm view` for up to a minute. Losing that race means
           # the version is already on NPM — which is the outcome we wanted.
+          #
+          # Auth: strip every token source so npm uses OIDC trusted publishing
+          # and not the read-only token (see the prepare step for why). A clean
+          # userconfig + dropping NODE_AUTH_TOKEN/NPM_TOKEN leaves only the
+          # OIDC id-token GitHub provides via `permissions: id-token: write`.
           set +e
-          PUBLISH_OUTPUT=$(npm publish 2>&1)
+          PUBLISH_OUTPUT=$(env -u NODE_AUTH_TOKEN -u NPM_TOKEN -u BUN_AUTH_TOKEN \
+            NPM_CONFIG_USERCONFIG="${CLEAN_NPMRC:-$RUNNER_TEMP/.npmrc-oidc}" \
+            npm publish 2>&1)
           PUBLISH_STATUS=$?
           set -e
           echo "$PUBLISH_OUTPUT"
 
-          if [ $PUBLISH_STATUS -ne 0 ]; then
-            if echo "$PUBLISH_OUTPUT" | grep -qi "cannot publish over the previously published version"; then
-              echo "ℹ️  Version already on NPM — published outside this run, nothing to do"
-              exit 0
-            fi
-            exit $PUBLISH_STATUS
+          if [ $PUBLISH_STATUS -eq 0 ]; then
+            exit 0
           fi
+
+          # Already on the registry (race with the pre-check or a prior run).
+          if echo "$PUBLISH_OUTPUT" | grep -qi "cannot publish over the previously published version"; then
+            echo "ℹ️  Version already on NPM — published outside this run, nothing to do"
+            exit 0
+          fi
+
+          # Staged-but-not-completed: npm did NOT authorize via OIDC and fell
+          # back to the 2FA-bypass token, which it staged instead of publishing.
+          # This never promotes on its own, so fail loudly with the real cause.
+          if echo "$PUBLISH_OUTPUT" | grep -qi "previously staged version"; then
+            echo "::error::npm STAGED this publish instead of completing it — OIDC trusted publishing did not authorize it."
+            echo "A 2FA-bypass token was used as the credential, so npm deferred the publish for 2FA and stranded the version."
+            echo "Fix: on npmjs.com, add a Trusted Publisher for ${{ needs.check_for_release.outputs.package_name }}:"
+            echo "  owner/repo = this package's GitHub repo, workflow file = ci-cd.yml (the CALLER, not unified-cicd.yml)."
+            echo "Then bump the version and re-run (the stranded staged version cannot be reused)."
+          fi
+          exit $PUBLISH_STATUS
 
       - name: "Notify deployment success"
         if: success() && steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true'
