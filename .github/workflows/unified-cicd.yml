@@ -290,21 +290,48 @@ jobs:
           node-version: ${{ inputs.node-version }}
           registry-url: "https://registry.npmjs.org"
 
+      # --- Consume-side registry routing -------------------------------------
+      # For publish-target: github, the repo's own @<owner> dependencies resolve
+      # from GitHub Packages (authenticated with the built-in GITHUB_TOKEN, which
+      # needs no NPM_TOKEN) while every other dependency stays on npmjs. This
+      # .npmrc replaces any committed one for the duration of the job. For the
+      # default npm path, behavior is unchanged (npmjs + NPM_TOKEN). No job-level
+      # permissions are declared here on purpose (see release_github_packages);
+      # the token's packages scope comes from the caller's top-level permissions.
+      - name: "Configure registry for GitHub Packages (consume @scope deps)"
+        if: inputs.publish-target == 'github'
+        run: |
+          OWNER_LC="$(printf '%s' "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+          {
+            echo "registry=https://registry.npmjs.org/"
+            echo "@$OWNER_LC:registry=https://npm.pkg.github.com"
+            echo "//npm.pkg.github.com/:_authToken=\${NODE_AUTH_TOKEN}"
+          } > .npmrc
+          cp .npmrc "$HOME/.npmrc"
+          echo "Routed @$OWNER_LC scope -> GitHub Packages (GITHUB_TOKEN) for install"
+
       - name: "Setup npm auth for Bun"
-        if: steps.detect-pm.outputs.manager == 'bun'
+        if: steps.detect-pm.outputs.manager == 'bun' && inputs.publish-target != 'github'
         run: |
           echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" >> ~/.npmrc
           echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > .npmrc
 
-      - name: "Install dependencies (Bun)"
-        if: steps.detect-pm.outputs.manager == 'bun'
+      - name: "Install dependencies (Bun, npmjs)"
+        if: steps.detect-pm.outputs.manager == 'bun' && inputs.publish-target != 'github'
         run: bun install
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           BUN_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: "Install dependencies (npm)"
-        if: steps.detect-pm.outputs.manager == 'npm'
+      - name: "Install dependencies (Bun, GitHub Packages)"
+        if: steps.detect-pm.outputs.manager == 'bun' && inputs.publish-target == 'github'
+        run: bun install
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUN_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Install dependencies (npm, npmjs)"
+        if: steps.detect-pm.outputs.manager == 'npm' && inputs.publish-target != 'github'
         run: |
           # Workaround for Rollup optional dependencies issue
           # https://github.com/npm/cli/issues/4828
@@ -318,6 +345,20 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: "Install dependencies (npm, GitHub Packages)"
+        if: steps.detect-pm.outputs.manager == 'npm' && inputs.publish-target == 'github'
+        run: |
+          # npm install (not ci): the lockfile's resolved registry URLs change when
+          # a scope is rerouted to GitHub Packages, so a frozen ci would mismatch.
+          if grep -q '"rollup"' package.json 2>/dev/null; then
+            rm -rf node_modules package-lock.json
+            npm install --legacy-peer-deps
+          else
+            npm install
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Run type checking"
         if: steps.detect-pm.outputs.manager != 'python' && steps.detect-pm.outputs.manager != 'docker'
