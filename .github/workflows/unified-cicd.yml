@@ -116,6 +116,9 @@ on:
       GIT_DEP_TOKEN:
         description: "GitHub PAT with read-only Contents access to private repos used as git dependencies"
         required: false
+      GH_PACKAGES_READ_TOKEN:
+        description: "GitHub PAT with read:packages, to install @scope deps from GitHub Packages across repos (publish-target: github). Falls back to GITHUB_TOKEN when unset."
+        required: false
 
 jobs:
   test:
