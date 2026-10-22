@@ -35,6 +35,10 @@ on:
         description: "Skip NPM publishing even if NPM_TOKEN is configured (useful for apps that need NPM_TOKEN only for private dependencies)"
         type: boolean
         default: false
+      publish-target:
+        description: "Where to publish the npm package: 'npm' (npmjs.org via OIDC trusted publishing, the default) or 'github' (GitHub Packages via GITHUB_TOKEN). Set to 'github' per repo to migrate it to GitHub Packages without affecting other repos."
+        type: string
+        default: "npm"
       cloudflare-project-name:
         description: "Cloudflare Pages project name (defaults to repo name, only used if Cloudflare secrets are set)"
         type: string
@@ -425,6 +429,7 @@ jobs:
       has_package_json: ${{ steps.check.outputs.has_package_json }}
       has_pyproject_toml: ${{ steps.check.outputs.has_pyproject_toml }}
       package_name: ${{ steps.check.outputs.package_name }}
+      package_name_unscoped: ${{ steps.check.outputs.package_name_unscoped }}
       is_develop_branch: ${{ steps.check.outputs.is_develop_branch }}
       cloudflare_configured: ${{ steps.check.outputs.cloudflare_configured }}
     steps:
@@ -522,6 +527,9 @@ jobs:
           echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
           echo "version_tag=v$CURRENT_VERSION" >> $GITHUB_OUTPUT
           echo "package_name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
+          # Unscoped name (strip "@scope/") — GitHub Packages APIs address packages
+          # by their unscoped name, e.g. "types" for "@sudobility/types".
+          echo "package_name_unscoped=${PACKAGE_NAME##*/}" >> $GITHUB_OUTPUT
           echo "should_release=true" >> $GITHUB_OUTPUT
 
           echo "✅ Release checks passed for version $CURRENT_VERSION"
@@ -535,7 +543,8 @@ jobs:
     if: |
       needs.check_for_release.outputs.should_release == 'true' &&
       needs.check_for_release.outputs.has_package_json == 'true' &&
-      inputs.skip-npm-publish != true
+      inputs.skip-npm-publish != true &&
+      inputs.publish-target != 'github'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -752,15 +761,17 @@ jobs:
             exit 0
           fi
 
-          # Staged-but-not-completed: npm did NOT authorize via OIDC and fell
-          # back to the 2FA-bypass token, which it staged instead of publishing.
-          # This never promotes on its own, so fail loudly with the real cause.
+          # Staged-but-not-completed: npm could not AUTHORIZE this publish, so it
+          # staged the version pending 2FA instead of completing it. The version
+          # never promotes on its own (stays invisible; any retry of the same
+          # version hits this same E409). Almost always this means no Trusted
+          # Publisher is configured for the package that matches this workflow.
           if echo "$PUBLISH_OUTPUT" | grep -qi "previously staged version"; then
-            echo "::error::npm STAGED this publish instead of completing it — OIDC trusted publishing did not authorize it."
-            echo "A 2FA-bypass token was used as the credential, so npm deferred the publish for 2FA and stranded the version."
-            echo "Fix: on npmjs.com, add a Trusted Publisher for ${{ needs.check_for_release.outputs.package_name }}:"
-            echo "  owner/repo = this package's GitHub repo, workflow file = ci-cd.yml (the CALLER, not unified-cicd.yml)."
-            echo "Then bump the version and re-run (the stranded staged version cannot be reused)."
+            echo "::error::npm STAGED this publish instead of completing it — the publish was not authorized, so npm deferred it for 2FA."
+            echo "Most likely cause: no npm Trusted Publisher is configured for ${{ needs.check_for_release.outputs.package_name }} matching this repo + the CALLER workflow 'ci-cd.yml'."
+            echo "Fix: run workflows/scripts/setup-trusted-publishers.sh (needs interactive 2FA), or add it on npmjs.com:"
+            echo "  package Settings → Trusted Publisher → GitHub Actions: repository = this package's repo, workflow file = ci-cd.yml (NOT unified-cicd.yml)."
+            echo "Then bump the version and re-run — the stranded staged version cannot be reused."
           fi
           exit $PUBLISH_STATUS
 
@@ -776,6 +787,151 @@ jobs:
         run: |
           echo "❌ Release deployment FAILED for commit ${{ github.sha }}"
           echo "Check: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+  # GitHub Packages publishing path — opt in per repo with `publish-target: github`
+  # in ci-cd.yml. Auth is the built-in GITHUB_TOKEN (no npm token, no OIDC trusted
+  # publisher), and old versions are pruned to cap storage. REQUIREMENT: the repo
+  # must be owned by the org whose name matches the package scope (e.g. package
+  # "@sudobility/x" -> repo owned by org "sudobility"); GitHub Packages rejects a
+  # scope that doesn't match the owner.
+  release_github_packages:
+    name: "Release to GitHub Packages"
+    needs:
+      - test
+      - check_for_release
+    if: |
+      needs.check_for_release.outputs.should_release == 'true' &&
+      needs.check_for_release.outputs.has_package_json == 'true' &&
+      inputs.skip-npm-publish != true &&
+      inputs.publish-target == 'github'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write     # create the GitHub Release
+      packages: write     # publish, and delete old versions (prune)
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v6
+
+      - name: "Detect package manager"
+        id: detect-pm
+        run: |
+          if [ -f "bun.lock" ] || [ -f "bun.lockb" ]; then
+            echo "manager=bun" >> $GITHUB_OUTPUT
+          else
+            echo "manager=npm" >> $GITHUB_OUTPUT
+          fi
+
+      - name: "Setup Bun"
+        if: steps.detect-pm.outputs.manager == 'bun'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ inputs.bun-version }}
+
+      - name: "Setup Node.js"
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      # Route the package's scope to GitHub Packages and wire the token. The owner
+      # is lowercased because npm scopes are always lowercase even when the GitHub
+      # org is displayed with capitals (e.g. org "Sudobility" -> scope
+      # "@sudobility"). The ${NODE_AUTH_TOKEN} placeholder is interpolated by npm
+      # at publish time, so no secret is written into the file.
+      - name: "Configure npm for GitHub Packages"
+        run: |
+          OWNER_LC="$(printf '%s' "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+          echo "Scope routed to GitHub Packages: @$OWNER_LC"
+          {
+            echo "@$OWNER_LC:registry=https://npm.pkg.github.com"
+            echo "//npm.pkg.github.com/:_authToken=\${NODE_AUTH_TOKEN}"
+          } > .npmrc
+          cp .npmrc "$HOME/.npmrc"
+
+      - name: "Check if version already on GitHub Packages"
+        id: check-gh-version
+        run: |
+          CURRENT_VERSION="${{ needs.check_for_release.outputs.version }}"
+          PACKAGE_NAME="${{ needs.check_for_release.outputs.package_name }}"
+          PUBLISHED=$(npm view "$PACKAGE_NAME@$CURRENT_VERSION" version 2>/dev/null || echo "")
+          if [ "$CURRENT_VERSION" = "$PUBLISHED" ]; then
+            echo "version_exists=true" >> $GITHUB_OUTPUT
+            echo "ℹ️  $PACKAGE_NAME@$CURRENT_VERSION already on GitHub Packages, skipping publish"
+          else
+            echo "version_exists=false" >> $GITHUB_OUTPUT
+            echo "✅ $PACKAGE_NAME@$CURRENT_VERSION not on GitHub Packages, will publish"
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Install dependencies"
+        if: steps.check-gh-version.outputs.version_exists != 'true'
+        run: |
+          if [ "${{ steps.detect-pm.outputs.manager }}" = "bun" ]; then
+            bun install
+          else
+            npm ci
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUN_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Build project"
+        if: steps.check-gh-version.outputs.version_exists != 'true'
+        run: |
+          PM="${{ steps.detect-pm.outputs.manager }}"
+          if grep -q '"build:ci"' package.json 2>/dev/null; then
+            if [ "$PM" = "bun" ]; then bun run build:ci; else npm run build:ci; fi
+          elif grep -q '"build"' package.json 2>/dev/null; then
+            if [ "$PM" = "bun" ]; then bun run build; else npm run build; fi
+          else
+            echo "ℹ️  No build script found, skipping build"
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUN_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Create GitHub Release"
+        if: steps.check-gh-version.outputs.version_exists != 'true'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.check_for_release.outputs.version_tag }}
+          name: "Release ${{ needs.check_for_release.outputs.version }}"
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Publish to GitHub Packages"
+        if: steps.check-gh-version.outputs.version_exists != 'true'
+        run: |
+          echo "📦 Publishing ${{ needs.check_for_release.outputs.package_name }} to GitHub Packages"
+          # Access/visibility is governed by the package + repo on GitHub; routing
+          # and auth come from the .npmrc written above. No --access (consistent
+          # with the npm path: package.json publishConfig is the source of truth).
+          npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Keep only the 3 newest versions to cap GitHub Packages storage. GITHUB_TOKEN
+      # with packages: write can delete versions of a package owned by this repo.
+      # If this fails with a permissions error on an org-scoped package, supply a
+      # PAT with delete:packages as the token instead. continue-on-error so a prune
+      # failure never fails an otherwise-successful release.
+      - name: "Prune old versions (keep last 3)"
+        if: steps.check-gh-version.outputs.version_exists != 'true'
+        continue-on-error: true
+        uses: actions/delete-package-versions@v5
+        with:
+          owner: ${{ github.repository_owner }}
+          package-name: ${{ needs.check_for_release.outputs.package_name_unscoped }}
+          package-type: npm
+          min-versions-to-keep: 3
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Notify"
+        if: success() && steps.check-gh-version.outputs.version_exists != 'true'
+        run: |
+          echo "🚀 Published ${{ needs.check_for_release.outputs.package_name }}@${{ needs.check_for_release.outputs.version }} to GitHub Packages"
+          echo "• https://github.com/${{ github.repository }}/pkgs/npm/${{ needs.check_for_release.outputs.package_name_unscoped }}"
 
   release_pypi:
     name: "Release to PyPI"
