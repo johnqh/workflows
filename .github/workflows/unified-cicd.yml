@@ -805,9 +805,15 @@ jobs:
       inputs.skip-npm-publish != true &&
       inputs.publish-target == 'github'
     runs-on: ubuntu-latest
-    permissions:
-      contents: write     # create the GitHub Release
-      packages: write     # publish, and delete old versions (prune)
+    # NO job-level permissions block on purpose. GitHub validates a reusable
+    # workflow's nested-job permission REQUESTS at load time, BEFORE `if:` is
+    # evaluated — so a job here that requests `packages: write` fails the entire
+    # workflow for EVERY caller that doesn't grant it, including npm-path callers
+    # where this job is skipped. Instead this job inherits the caller's granted
+    # permissions. A repo opting into publish-target: github MUST grant, in its
+    # own ci-cd.yml top-level permissions:
+    #     contents: write   # create the GitHub Release
+    #     packages: write   # publish to GitHub Packages + prune old versions
     steps:
       - name: "Checkout"
         uses: actions/checkout@v6
