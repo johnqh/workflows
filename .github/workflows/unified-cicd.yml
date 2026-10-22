@@ -327,8 +327,12 @@ jobs:
         if: steps.detect-pm.outputs.manager == 'bun' && inputs.publish-target == 'github'
         run: bun install
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BUN_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Consuming ANOTHER repo's package needs a read:packages PAT (org secret
+          # GH_PACKAGES_READ_TOKEN): the built-in GITHUB_TOKEN only reads its own
+          # repo's packages. Falls back to GITHUB_TOKEN when the secret is unset
+          # (fine for public packages / a repo's own package).
+          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_READ_TOKEN || secrets.GITHUB_TOKEN }}
+          BUN_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_READ_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: "Install dependencies (npm, npmjs)"
         if: steps.detect-pm.outputs.manager == 'npm' && inputs.publish-target != 'github'
@@ -358,7 +362,7 @@ jobs:
             npm install
           fi
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_READ_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: "Run type checking"
         if: steps.detect-pm.outputs.manager != 'python' && steps.detect-pm.outputs.manager != 'docker'
@@ -913,14 +917,18 @@ jobs:
       - name: "Install dependencies"
         if: steps.check-gh-version.outputs.version_exists != 'true'
         run: |
+          # npm install (not ci): scope reroute to GitHub Packages changes the
+          # lockfile's resolved URLs, so a frozen ci would mismatch.
           if [ "${{ steps.detect-pm.outputs.manager }}" = "bun" ]; then
             bun install
           else
-            npm ci
+            npm install
           fi
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BUN_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # read:packages PAT to pull cross-repo @scope deps; falls back to the
+          # built-in token for public / own-repo packages.
+          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_READ_TOKEN || secrets.GITHUB_TOKEN }}
+          BUN_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_READ_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: "Build project"
         if: steps.check-gh-version.outputs.version_exists != 'true'
@@ -934,8 +942,8 @@ jobs:
             echo "ℹ️  No build script found, skipping build"
           fi
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BUN_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_READ_TOKEN || secrets.GITHUB_TOKEN }}
+          BUN_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_READ_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: "Create GitHub Release"
         if: steps.check-gh-version.outputs.version_exists != 'true'
