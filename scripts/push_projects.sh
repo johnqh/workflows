@@ -833,6 +833,34 @@ update_sudobility_deps() {
         done <<< "$deps_info"
     fi
 
+    # Re-resolve TRANSITIVE @sudobility deps too, by regenerating the lockfile.
+    #
+    # The direct `bun add` above only re-resolves the packages it names. A
+    # @sudobility package pulled in transitively -- e.g. via a direct
+    # @sudobility dependency's peerDependencies, possibly several levels deep --
+    # keeps whatever the lockfile already had. When that pinned version has
+    # since been pruned from GitHub Packages (last-3 retention) or deleted from
+    # npm, a local install still passes from bun's cache while CI 404s on a
+    # fresh fetch. `bun update <names>` does NOT fix a deep transitive pin (it
+    # exits non-zero and leaves it); only a full re-resolution does. bun.lock is
+    # reproducible, so regenerating is a no-op (identical bytes, no diff) unless
+    # a version actually changed -- no perpetual churn. Third-party deps are
+    # still bounded by their package.json ranges, and the build/test validation
+    # below gates any resulting change before it is pushed.
+    if [ "$PKG_MANAGER" = "bun" ] && [ -f "$project_dir/bun.lock" ] && \
+       grep -q '@sudobility/' "$project_dir/bun.lock" 2>/dev/null; then
+        local lock_before lock_after
+        lock_before=$(shasum "$project_dir/bun.lock" 2>/dev/null | awk '{print $1}')
+        log_info "Regenerating bun.lock to flush any pruned transitive @sudobility pins..."
+        ( cd "$project_dir" && rm -f bun.lock && run_with_timeout 180 bun install ) >/dev/null 2>&1 \
+            || log_warning "bun install during lockfile regen reported an issue (continuing)"
+        lock_after=$(shasum "$project_dir/bun.lock" 2>/dev/null | awk '{print $1}')
+        if [ "$lock_before" != "$lock_after" ]; then
+            log_success "Refreshed @sudobility versions in bun.lock (incl. transitive)"
+            has_updates=true
+        fi
+    fi
+
     if [ "$has_updates" != true ]; then
         log_info "No updates needed"
     fi

@@ -1269,7 +1269,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            NPM_TOKEN=${{ secrets.NPM_TOKEN }}
+            GH_PACKAGES_TOKEN=${{ secrets.GH_PACKAGES_READ_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: "Notify Docker deployment success"
         if: success() && steps.check-secrets.outputs.configured == 'true' && steps.check-docker-version.outputs.version_exists != 'true'
