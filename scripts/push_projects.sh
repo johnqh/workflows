@@ -1600,6 +1600,14 @@ commit_and_push() {
             fi
         fi
 
+        if [ -n "$commit_msg" ]; then
+            local first_line="${commit_msg%%$'\n'*}"
+            if [ "${#first_line}" -gt 72 ] || ! printf '%s\n' "$first_line" | grep -Eq '^(feat|fix|refactor|chore|docs|test|ci|perf|build|revert)(\([[:alnum:]_-]+\))?!?: .+'; then
+                log_warning "AI commit message did not match the required conventional format; using heuristic"
+                commit_msg=""
+            fi
+        fi
+
         if [ -z "$commit_msg" ]; then
             log_info "Using heuristic commit message"
             commit_msg=$(analyze_changes "$version" "$FORCE_MODE")
