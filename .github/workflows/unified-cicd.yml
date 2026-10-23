@@ -321,14 +321,20 @@ jobs:
 
       - name: "Install dependencies (Bun, npmjs)"
         if: steps.detect-pm.outputs.manager == 'bun' && inputs.publish-target != 'github'
-        run: bun install
+        run: |
+          # Some callers track node_modules; installing over checkout can leave
+          # incomplete packages even when Bun exits successfully.
+          rm -rf node_modules
+          bun install
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           BUN_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: "Install dependencies (Bun, GitHub Packages)"
         if: steps.detect-pm.outputs.manager == 'bun' && inputs.publish-target == 'github'
-        run: bun install
+        run: |
+          rm -rf node_modules
+          bun install
         env:
           # Consuming ANOTHER repo's package needs a read:packages PAT (org secret
           # GH_PACKAGES_READ_TOKEN): the built-in GITHUB_TOKEN only reads its own
@@ -699,7 +705,9 @@ jobs:
 
       - name: "Install dependencies (Bun)"
         if: steps.check-secrets.outputs.configured == 'true' && steps.check-npm-version.outputs.version_exists != 'true' && steps.detect-pm.outputs.manager == 'bun'
-        run: bun install
+        run: |
+          rm -rf node_modules
+          bun install
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           BUN_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -923,6 +931,7 @@ jobs:
           # npm install (not ci): scope reroute to GitHub Packages changes the
           # lockfile's resolved URLs, so a frozen ci would mismatch.
           if [ "${{ steps.detect-pm.outputs.manager }}" = "bun" ]; then
+            rm -rf node_modules
             bun install
           else
             npm install

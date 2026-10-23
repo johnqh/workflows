@@ -588,6 +588,7 @@ published_package_id() {
 wait_for_npm_publish() {
     local package_id="$1"
     local max_wait="$2"
+    local project_dir="$3"
 
     # Scoped names start with '@', so strip from the *last* '@' only:
     # "@sudobility/music_lib@1.7.49" -> name "@sudobility/music_lib", ver "1.7.49"
@@ -598,7 +599,9 @@ wait_for_npm_publish() {
     local checked_reachable=false
 
     while [ "$waited" -lt "$max_wait" ]; do
-        if [ "$(bun info "${name}@${version}" version 2>/dev/null)" = "$version" ]; then
+        # Read the publishing project's .npmrc. A downstream project's registry
+        # mapping may point at npmjs while this package ships to GitHub Packages.
+        if [ "$(cd "$project_dir" && bun info "${name}@${version}" version 2>/dev/null)" = "$version" ]; then
             [ "$waited" -gt 0 ] && log_info "npm served $package_id after ${waited}s"
             return 0
         fi
@@ -610,7 +613,7 @@ wait_for_npm_publish() {
         # miss, since a reachable registry stays reachable.
         if [ "$checked_reachable" = false ]; then
             checked_reachable=true
-            if ! bun info "$name" version >/dev/null 2>&1; then
+            if ! (cd "$project_dir" && bun info "$name" version >/dev/null 2>&1); then
                 log_error "Cannot read $name from npm at all — this is not publish lag"
                 log_error "Check registry auth (a project .npmrc may reference an unset \${NPM_TOKEN})"
                 return 1
@@ -635,8 +638,10 @@ wait_for_pending_npm_publishes() {
     local all_ok=true
 
     for package_id in "$@"; do
+        local project_dir="${package_id%%|*}"
+        package_id="${package_id#*|}"
         log_info "Waiting for npm to serve $package_id (cap ${max_wait}s)..."
-        wait_for_npm_publish "$package_id" "$max_wait" &
+        wait_for_npm_publish "$package_id" "$max_wait" "$project_dir" &
         pids+=("$!")
     done
 
@@ -1949,7 +1954,7 @@ run_push_projects() {
             local just_published
             just_published=$(published_package_id "$abs_path")
             if [ -n "$just_published" ]; then
-                pending_published_ids+=("$just_published")
+                pending_published_ids+=("$abs_path|$just_published")
             fi
         fi
         # process_result=2 means skipped (no changes), counter stays the same
