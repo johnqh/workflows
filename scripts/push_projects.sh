@@ -170,6 +170,15 @@ has_unpushed_commits() {
     [ "$(git rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)" -gt 0 ]
 }
 
+# Some older repositories accidentally track node_modules. Installs change
+# those files locally, but dependency snapshots must never trigger or enter a
+# release commit. Keep the exclusion in status checks and staging alike.
+has_project_changes() {
+    ! git diff --quiet -- . ':(exclude)node_modules' ||
+        ! git diff --cached --quiet -- . ':(exclude)node_modules' ||
+        [ -n "$(git ls-files --others --exclude-standard -- . ':(exclude)node_modules')" ]
+}
+
 # Run package manager install command
 pm_install() {
     local packages=("$@")
@@ -1561,7 +1570,7 @@ commit_and_push() {
     local project_name="$2"
 
     local needs_commit=true
-    if git diff --quiet && git diff --cached --quiet; then
+    if ! has_project_changes; then
         needs_commit=false
         if ! has_unpushed_commits; then
             log_info "No changes to commit and nothing unpushed"
@@ -1578,6 +1587,10 @@ commit_and_push() {
             log_error "Failed to stage changes (timed out or exited unsuccessfully)"
             return 1
         fi
+        # Git's pathspec exclusions still error when an ignored node_modules
+        # directory exists. Stage normally, then remove tracked install files
+        # from the index before creating the commit.
+        git restore --staged -- node_modules 2>/dev/null || true
         log_success "Changes staged"
 
         local version=$(bun -e "console.log(require('./package.json').version)" 2>/dev/null || echo "unknown")
@@ -1747,7 +1760,7 @@ process_project() {
     fi
 
     local has_changes=false
-    if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+    if has_project_changes; then
         has_changes=true
     fi
 
@@ -1761,12 +1774,17 @@ process_project() {
 
     if [ "$has_changes" = true ]; then
         log_info "Changed files:"
-        git diff --name-only
-        git diff --cached --name-only
+        git diff --name-only -- . ':(exclude)node_modules'
+        git diff --cached --name-only -- . ':(exclude)node_modules'
     fi
 
     if [ "$has_changes" = false ] && [ "$has_unpushed" = true ]; then
-        log_info "No working-tree changes, but $(git rev-list --count '@{u}..HEAD' 2>/dev/null) commit(s) ahead of upstream -- proceeding so they are pushed"
+        log_info "No working-tree changes, but $(git rev-list --count '@{u}..HEAD' 2>/dev/null) commit(s) ahead of upstream -- pushing without another version bump"
+        if ! commit_and_push "$project_path" "$project_name"; then
+            log_error "Failed to push existing commits for $project_name"
+            return 1
+        fi
+        return 2
     fi
 
     if [ "$has_changes" = false ] && [ "$has_unpushed" = false ] && [ "$FORCE_MODE" = false ]; then
