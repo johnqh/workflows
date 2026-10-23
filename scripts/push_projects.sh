@@ -596,7 +596,6 @@ wait_for_npm_publish() {
     local version="${package_id##*@}"
 
     local waited=0
-    local checked_reachable=false
 
     while [ "$waited" -lt "$max_wait" ]; do
         # Read the publishing project's .npmrc. A downstream project's registry
@@ -606,20 +605,8 @@ wait_for_npm_publish() {
             return 0
         fi
 
-        # A miss means "not published yet" — or that we cannot read the
-        # registry at all, which looks identical and would otherwise burn the
-        # whole cap before saying so. A project-local .npmrc referencing an
-        # unset ${NPM_TOKEN} is the usual cause. Checked once, on the first
-        # miss, since a reachable registry stays reachable.
-        if [ "$checked_reachable" = false ]; then
-            checked_reachable=true
-            if ! (cd "$project_dir" && bun info "$name" version >/dev/null 2>&1); then
-                log_error "Cannot read $name from npm at all — this is not publish lag"
-                log_error "Check registry auth (a project .npmrc may reference an unset \${NPM_TOKEN})"
-                return 1
-            fi
-        fi
-
+        # The package itself may not exist yet on its first release. Keep
+        # polling the exact version until it appears or the cap expires.
         sleep "$NPM_PUBLISH_POLL_INTERVAL"
         waited=$((waited + NPM_PUBLISH_POLL_INTERVAL))
     done
@@ -1973,7 +1960,10 @@ run_push_projects() {
                 # in between are configured with a 0 wait. Poll the whole batch
                 # concurrently so this boundary costs one cap, not one cap per
                 # package.
-                wait_for_pending_npm_publishes "$poll_cap" "${pending_published_ids[@]}" || true
+                if ! wait_for_pending_npm_publishes "$poll_cap" "${pending_published_ids[@]}"; then
+                    log_error "Stopping before downstream packages consume stale versions"
+                    return 1
+                fi
 
                 # Once, after the whole set: the cache only has to be dropped
                 # before the next project resolves its dependencies.
@@ -1997,7 +1987,10 @@ run_push_projects() {
     # boundary to trigger their batch, so flush it once before reporting done.
     if [ "${#pending_published_ids[@]}" -gt 0 ]; then
         log_info "Final npm publication batch: checking ${#pending_published_ids[@]} package(s)..."
-        wait_for_pending_npm_publishes "$NPM_PUBLISH_POLL_MAX" "${pending_published_ids[@]}" || true
+        if ! wait_for_pending_npm_publishes "$NPM_PUBLISH_POLL_MAX" "${pending_published_ids[@]}"; then
+            log_error "One or more final package releases did not become available"
+            return 1
+        fi
         invalidate_packument_cache
         pending_published_ids=()
     fi
