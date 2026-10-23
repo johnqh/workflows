@@ -312,7 +312,6 @@ jobs:
           } > .npmrc
           cp .npmrc "$HOME/.npmrc"
           echo "Routed @$OWNER_LC scope -> GitHub Packages for install"
-          echo "DBG PAT present: ${{ secrets.GH_PACKAGES_READ_TOKEN != '' }}"
 
       - name: "Setup npm auth for Bun"
         if: steps.detect-pm.outputs.manager == 'bun' && inputs.publish-target != 'github'
