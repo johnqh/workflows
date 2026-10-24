@@ -846,7 +846,7 @@ jobs:
 
   # GitHub Packages publishing path — opt in per repo with `publish-target: github`
   # in ci-cd.yml. Auth is the built-in GITHUB_TOKEN (no npm token, no OIDC trusted
-  # publisher), and old versions are pruned to cap storage. REQUIREMENT: the repo
+  # publisher); all published versions are kept (not pruned). REQUIREMENT: the repo
   # must be owned by the org whose name matches the package scope (e.g. package
   # "@sudobility/x" -> repo owned by org "sudobility"); GitHub Packages rejects a
   # scope that doesn't match the owner.
@@ -869,7 +869,7 @@ jobs:
     # permissions. A repo opting into publish-target: github MUST grant, in its
     # own ci-cd.yml top-level permissions:
     #     contents: write   # create the GitHub Release
-    #     packages: write   # publish to GitHub Packages + prune old versions
+    #     packages: write   # publish to GitHub Packages
     steps:
       - name: "Checkout"
         uses: actions/checkout@v6
@@ -978,22 +978,13 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Keep only the 3 newest versions to cap GitHub Packages storage. GITHUB_TOKEN
-      # with packages: write can delete versions of a package owned by this repo.
-      # If this fails with a permissions error on an org-scoped package, supply a
-      # PAT with delete:packages as the token instead. continue-on-error so a prune
-      # failure never fails an otherwise-successful release.
-      - name: "Prune old versions (keep last 3)"
-        if: steps.check-gh-version.outputs.version_exists != 'true'
-        continue-on-error: true
-        uses: actions/delete-package-versions@v5
-        with:
-          owner: ${{ github.repository_owner }}
-          package-name: ${{ needs.check_for_release.outputs.package_name_unscoped }}
-          package-type: npm
-          min-versions-to-keep: 3
-          token: ${{ secrets.GITHUB_TOKEN }}
-
+      # NOTE: old versions are deliberately NOT pruned. GitHub Packages keeps
+      # every published version (like npmjs), so a transitive @sudobility pin in
+      # a consumer's lockfile always resolves on a fresh CI fetch. A last-3
+      # prune used to run here; it forced push_projects.sh to regenerate every
+      # consumer's bun.lock to flush pins to deleted versions, which churned
+      # unrelated third-party deps on every release. Keeping all versions is far
+      # cheaper than that churn.
       - name: "Notify"
         if: success() && steps.check-gh-version.outputs.version_exists != 'true'
         run: |

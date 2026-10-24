@@ -833,83 +833,15 @@ update_sudobility_deps() {
         done <<< "$deps_info"
     fi
 
-    # Refresh TRANSITIVE @sudobility pins WITHOUT drifting any third-party dep.
-    #
-    # The direct `bun add` above only re-resolves the packages it names. A
-    # @sudobility package pulled in transitively -- e.g. via a direct
-    # @sudobility dependency's peerDependencies, possibly several levels deep --
-    # keeps whatever the lockfile already had. When that pinned version has
-    # since been pruned from GitHub Packages (last-3 retention) or deleted from
-    # npm, a local install still passes from bun's cache while CI 404s on a
-    # fresh fetch, so the stale transitive pin has to be refreshed.
-    #
-    # A blunt `rm bun.lock && bun install` refreshes it but ALSO re-resolves the
-    # entire third-party tree, and bun is NOT stable across runs for nested
-    # third-party deps -- it re-picks versions (even downgrades, e.g. semver
-    # 7.8.5 -> 7.7.4), so every run emitted a lockfile diff and a pure
-    # third-party-churn commit even when no @sudobility version changed. (The
-    # old comment here claimed a regen was "reproducible, a no-op unless a
-    # version changed" -- that assumption was false and is what this fixes.)
-    #
-    # Instead: regenerate into a scratch copy, then RECONCILE -- walk the
-    # ORIGINAL lockfile and substitute only its @sudobility pin lines with the
-    # freshly-resolved versions. Every non-@sudobility line stays byte-for-byte
-    # as it was, so third-party pins never drift and bun's non-deterministic
-    # nested-dedup churn is discarded. When no @sudobility pin changed the result
-    # is identical to the original -> no diff, no churn commit. The one case the
-    # reconcile cannot place is a brand-new @sudobility transitive KEY the old
-    # lockfile lacked; that (rare, a real new dep) falls back to the full regen.
-    if [ "$PKG_MANAGER" = "bun" ] && [ -f "$project_dir/bun.lock" ] && \
-       grep -q '@sudobility/' "$project_dir/bun.lock" 2>/dev/null; then
-        local lock_before lock_backup lock_regen
-        lock_before=$(shasum "$project_dir/bun.lock" 2>/dev/null | awk '{print $1}')
-        lock_backup=$(mktemp); lock_regen=$(mktemp)
-        cp "$project_dir/bun.lock" "$lock_backup"
-        log_info "Refreshing @sudobility pins in bun.lock (third-party left untouched)..."
-        if ( cd "$project_dir" && rm -f bun.lock && run_with_timeout 180 bun install ) >/dev/null 2>&1 \
-           && [ -f "$project_dir/bun.lock" ] && grep -q '@sudobility/' "$project_dir/bun.lock"; then
-            cp "$project_dir/bun.lock" "$lock_regen"
-            # Does the regen introduce an @sudobility pin key the old lockfile did
-            # not have (a brand-new transitive @sudobility dep)? If so we cannot
-            # splice it into the frozen lockfile at the right sorted position, so
-            # keep the full regen for correctness (rare; a real new dependency).
-            local new_sudo_keys
-            new_sudo_keys=$(comm -13 \
-                <(sed -nE 's/^    "([^"]*)": \["@sudobility\/.*/\1/p' "$lock_backup" | sort -u) \
-                <(sed -nE 's/^    "([^"]*)": \["@sudobility\/.*/\1/p' "$lock_regen" | sort -u))
-            if [ -n "$new_sudo_keys" ]; then
-                log_info "regen adds new @sudobility transitive dep(s); keeping full regenerated lockfile"
-                cp "$lock_regen" "$project_dir/bun.lock"
-            else
-                # Walk the ORIGINAL lockfile and substitute only its @sudobility
-                # pin lines with the freshly-resolved versions from the regen.
-                # Every non-@sudobility line is emitted verbatim from the original,
-                # so third-party pins never drift (no churn), order is preserved,
-                # and an @sudobility key dropped by the regen is dropped here too.
-                awk '
-                  NR==FNR {
-                    if ($0 ~ /^    "[^"]*": \["@sudobility\//) { k=$0; sub(/^    "/,"",k); sub(/": .*/,"",k); reg[k]=$0 }
-                    next
-                  }
-                  {
-                    if ($0 ~ /^    "[^"]*": \["@sudobility\//) {
-                      k=$0; sub(/^    "/,"",k); sub(/": .*/,"",k)
-                      if (k in reg) { print reg[k]; next } else { next }
-                    }
-                    print
-                  }
-                ' "$lock_regen" "$lock_backup" > "$project_dir/bun.lock"
-            fi
-        else
-            log_warning "lockfile regen failed; restoring original bun.lock"
-            cp "$lock_backup" "$project_dir/bun.lock"
-        fi
-        rm -f "$lock_backup" "$lock_regen"
-        if [ "$lock_before" != "$(shasum "$project_dir/bun.lock" 2>/dev/null | awk '{print $1}')" ]; then
-            log_success "Refreshed @sudobility versions in bun.lock (third-party unchanged)"
-            has_updates=true
-        fi
-    fi
+    # NOTE: no lockfile regeneration here on purpose. The `bun add` above
+    # already updates package.json AND bun.lock for the @sudobility packages it
+    # bumps (and re-resolves their subtrees), so plain installs stay stable and
+    # third-party pins never drift. There used to be a `rm -f bun.lock && bun
+    # install` regen to flush transitive @sudobility pins to versions that
+    # GitHub Packages had pruned (last-3 retention) -- but that re-resolved the
+    # whole tree and churned unrelated third-party deps on every run. The prune
+    # step was removed from unified-cicd.yml (all versions are kept, like
+    # npmjs), so no stale transitive pin can 404 and the regen is unnecessary.
 
     if [ "$has_updates" != true ]; then
         log_info "No updates needed"
