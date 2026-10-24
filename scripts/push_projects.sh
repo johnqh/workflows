@@ -1,6 +1,6 @@
 #!/bin/bash
 
-PUSH_PROJECTS_VERSION="1.6.0"
+PUSH_PROJECTS_VERSION="1.6.1"
 
 # push_projects.sh - Reusable script to update, validate, version bump, and push projects
 #
@@ -412,9 +412,9 @@ LOGIC:
     5. If changes exist (or --force): bump version, commit, push
        React Native apps (react-native dependency + ios/ or android/)
        are committed and pushed without a version bump, even with --force
-       A brand-new npm library (package not yet on npm, has a ci-cd.yml without
-       skip-npm-publish) is published once INTERACTIVELY (npm login + 2FA)
-       before the push, so CI/OIDC owns every release after that.
+       A brand-new npm library (package not yet on the registry) is first
+       published by CI on push -- GITHUB_TOKEN creates the package on GitHub
+       Packages non-interactively, so no local npm login/bootstrap is needed.
     6. If no changes: skip to next package
 
 SUPPORTED PACKAGE MANAGERS:
