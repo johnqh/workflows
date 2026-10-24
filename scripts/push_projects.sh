@@ -28,15 +28,18 @@ PUSH_PROJECTS_VERSION="1.6.1"
 #   --continue-on-error, -c  Log failures and continue to the next project
 #
 # Environment:
-#   NPM_PUBLISH_POLL_MAX       Seconds to wait for a publish to appear on npm
-#                              (default 600). A ceiling, not a duration.
+#   NPM_PUBLISH_POLL_MAX       Seconds to wait for a publish to appear on the
+#                              registry (default 600). A ceiling, not a duration.
+#                              (The env var keeps its NPM_ name for compatibility;
+#                              the registry is whatever the project's .npmrc maps
+#                              a scope to — GitHub Packages for @sudobility.)
 #   NPM_PUBLISH_POLL_INTERVAL  Seconds between registry checks (default 5).
 #   BUN_ADD_RETRIES            Retries of a failed `bun add` (default 4).
 #   BUN_ADD_RETRY_DELAY        Seconds before each retry (default 15).
 #
 # Note on "wait_after_seconds": since v1.2.0 this is no longer how long the
-# script sleeps. After a project publishes, the script polls npm for the exact
-# version it just pushed and continues the moment it is served — usually within
+# script sleeps. After a project publishes, the script polls the registry for the
+# exact version it just pushed and continues the moment it is served — usually within
 # seconds. The configured number now only raises the poll's cap when it exceeds
 # NPM_PUBLISH_POLL_MAX, and is still used as a plain sleep for projects that
 # publish nothing to npm (private or non-npm).
@@ -601,7 +604,7 @@ wait_for_npm_publish() {
         # Read the publishing project's .npmrc. A downstream project's registry
         # mapping may point at npmjs while this package ships to GitHub Packages.
         if [ "$(cd "$project_dir" && bun info "${name}@${version}" version 2>/dev/null)" = "$version" ]; then
-            [ "$waited" -gt 0 ] && log_info "npm served $package_id after ${waited}s"
+            [ "$waited" -gt 0 ] && log_info "registry served $package_id after ${waited}s"
             return 0
         fi
 
@@ -627,7 +630,7 @@ wait_for_pending_npm_publishes() {
     for package_id in "$@"; do
         local project_dir="${package_id%%|*}"
         package_id="${package_id#*|}"
-        log_info "Waiting for npm to serve $package_id (cap ${max_wait}s)..."
+        log_info "Waiting for the registry to serve $package_id (cap ${max_wait}s)..."
         wait_for_npm_publish "$package_id" "$max_wait" "$project_dir" &
         pids+=("$!")
     done
@@ -635,10 +638,10 @@ wait_for_pending_npm_publishes() {
     local pid
     for pid in "${pids[@]}"; do
         if wait "$pid"; then
-            log_success "npm is serving the associated package"
+            log_success "registry is serving the associated package"
         else
             all_ok=false
-            log_error "npm did not serve one of the pending packages within ${max_wait}s"
+            log_error "registry did not serve one of the pending packages within ${max_wait}s"
             log_error "Downstream projects may resolve the PREVIOUS version — check CI for the publish job"
         fi
     done
@@ -769,7 +772,7 @@ update_sudobility_deps() {
             latest_version=$(_lookup_latest "$pkg_name")
 
             if [ -z "$latest_version" ]; then
-                log_error "Failed to fetch latest version for $pkg_name from npm"
+                log_error "Failed to fetch latest version for $pkg_name from the registry"
                 return 2
             fi
 
@@ -816,7 +819,7 @@ update_sudobility_deps() {
             latest_version=$(_lookup_latest "$pkg_name")
 
             if [ -z "$latest_version" ]; then
-                log_error "Failed to fetch latest version for $pkg_name (peer) from npm"
+                log_error "Failed to fetch latest version for $pkg_name (peer) from the registry"
                 return 2
             fi
 
@@ -1155,7 +1158,7 @@ process_subpackages() {
         update_sudobility_deps "$subpackage_dir" || subpkg_update_result=$?
         if [ "$subpkg_update_result" -ne 0 ]; then
             if [ "$subpkg_update_result" -eq 2 ]; then
-                log_error "Failed to fetch @sudobility package from npm for sub-package $subpackage_name, stopping"
+                log_error "Failed to fetch @sudobility package from the registry for sub-package $subpackage_name, stopping"
             else
                 log_error "Failed to update @sudobility dependencies for sub-package $subpackage_name, stopping"
             fi
@@ -1702,12 +1705,12 @@ remove_sudobility_symlinks() {
         rm "$scope_dir/$pkg"
     done
 
-    log_info "Reinstalling to fetch packages from npm..."
+    log_info "Reinstalling to fetch packages from the registry..."
     if ! run_with_timeout "$GIT_OPERATION_TIMEOUT" pm_install >/dev/null 2>&1; then
         log_error "Reinstall timed out or failed while replacing symlinks"
         return 1
     fi
-    log_success "Replaced symlinks with npm packages"
+    log_success "Replaced symlinks with registry packages"
 }
 
 # Process a single project
@@ -1745,7 +1748,7 @@ process_project() {
     update_sudobility_deps "$project_path" || update_result=$?
     if [ "$update_result" -ne 0 ]; then
         if [ "$update_result" -eq 2 ]; then
-            log_error "Failed to fetch @sudobility package from npm, stopping"
+            log_error "Failed to fetch @sudobility package from the registry, stopping"
         else
             log_error "Failed to update @sudobility dependencies, stopping"
         fi
@@ -1993,7 +1996,7 @@ run_push_projects() {
                 # Something was processed, but nothing reached npm — a private
                 # package, or a project that publishes no package at all. There
                 # is no registry answer to wait for, so waiting is pure delay.
-                log_info "$changes_counter project(s) processed, none published to npm — no wait needed"
+                log_info "$changes_counter project(s) processed, none published — no wait needed"
                 changes_counter=0
             else
                 log_info "No changes published, skipping wait"
@@ -2004,7 +2007,7 @@ run_push_projects() {
     # A list may end with zero-delay projects. There is no later non-zero
     # boundary to trigger their batch, so flush it once before reporting done.
     if [ "${#pending_published_ids[@]}" -gt 0 ]; then
-        log_info "Final npm publication batch: checking ${#pending_published_ids[@]} package(s)..."
+        log_info "Final publication batch: checking ${#pending_published_ids[@]} package(s)..."
         if ! wait_for_pending_npm_publishes "$NPM_PUBLISH_POLL_MAX" "${pending_published_ids[@]}"; then
             log_error "One or more final package releases did not become available"
             return 1
