@@ -24,8 +24,8 @@
       "mechanism": "patch-package",
       "package": "react-native-macos",
       "version": "0.83.0",
-      "why": "C++ ReactCommon renderer fixes (ShadowNode/ShadowNodeFamily/UIManager nativeProps_DEPRECATED mutex) + Modal sheet + View recycle hover-reset (compile-level; cannot be swizzled). Re-ported from 0.81.9 to 0.83.0 on 2026-10-27 and validated by a macOS xcodebuild. Also carries the nil-class codegen hunk, kept here (not yet relying on @sudobility/components-rn's runtime swizzle, which is unpublished); drop it once the swizzle ships. Upstreamed as microsoft/react-native-macos#3155.",
-      "consumers": ["music_app_rn", "music_player_app_rn"]
+      "why": "C++ ReactCommon renderer fixes (ShadowNode/ShadowNodeFamily/UIManager nativeProps_DEPRECATED mutex) + Modal sheet + View recycle hover-reset (compile-level; cannot be swizzled). Re-ported from 0.81.9 to 0.83.0 on 2026-10-27 and validated by a macOS xcodebuild. The nil-class codegen hunk was removed on 2026-10-28 once @sudobility/components-rn@1.0.133 shipped the runtime swizzle (MoosiacThirdPartyComponentsFix) that handles it for every app. Renderer fixes upstreamed as microsoft/react-native-macos#3155.",
+      "consumers": ["music_app_rn", "music_player_app_rn", "music_app_rn-webgpu-spike"]
     },
     {
       "file": "patch-package/react-native-audio-api+0.13.3.patch",
@@ -33,7 +33,7 @@
       "package": "react-native-audio-api",
       "version": "0.13.3",
       "why": "Adds macOS support to the podspec + source (compile-level; still :ios-only upstream at 0.13.6). Music family only.",
-      "consumers": ["music_app_rn", "music_player_app_rn"]
+      "consumers": ["music_app_rn", "music_player_app_rn", "music_app_rn-webgpu-spike"]
     },
     {
       "file": "patch-package/react-native-svg+15.16.0.patch",
@@ -41,7 +41,15 @@
       "package": "react-native-svg",
       "version": "15.16.0",
       "why": "macOS CGImage extraction (NSImage has no .CGImage; both didReceiveImage sites) + Svg.tsx + Windows RNSVG Fabric renderer fixes (per-element redraw, leaked document per redraw). Compile-level. Re-based from 15.12.1 on 2026-10-27: the NSImage signature and the RNSVGSvgView wantsUpdateLayer override are now upstream in 15.16, so those hunks were dropped. Validated by a macOS xcodebuild.",
-      "consumers": ["music_app_rn", "music_player_app_rn"]
+      "consumers": ["music_app_rn", "music_player_app_rn", "music_app_rn-webgpu-spike"]
+    },
+    {
+      "file": "patch-package/react-native-webgpu+0.19.2.patch",
+      "mechanism": "patch-package",
+      "package": "react-native-webgpu",
+      "version": "0.19.2",
+      "why": "macOS support (compile-level): WebGPUView.h uses the cross-platform RNWGUIKit header instead of UIKit, RNWGUIKit.h fixes the AppKit casing + adds CAMetalLayer, MetalView.mm adds isFlipped so macOS gestures use a top-left origin. Still needed at 0.19.2 (not upstream). music_app_rn-webgpu-spike only. Bumped 0.13.0 -> 0.19.2 during the 0.83 port; the 0.13.0 hunks applied unchanged. Validated by a macOS xcodebuild.",
+      "consumers": ["music_app_rn-webgpu-spike"]
     }
   ],
   "obsolete": {
@@ -50,8 +58,7 @@
     "react-native-svg (RNSVGSvgView wantsUpdateLayer, NSImage signature)": "Upstream in react-native-svg 15.16.0; those hunks removed from the re-based svg patch. The CGImage extraction and Windows hunks are still needed.",
     "react-native-safe-area-context+5.6.2": "react-native-safe-area-context@5.6.2 ships src/NativeSafeAreaProvider.windows.tsx upstream (a re-export of CompatNativeSafeAreaProvider); that upstream file is what lands in node_modules, so the patch's custom View-backed provider never took effect. REMOVED from music_app_rn and music_app_rn-webgpu-spike on 2026-10-27; music_player_app_rn never had it. If music's Windows modals turn out to need the custom zero-inset provider, it must be re-done as a MODIFY of the upstream file, not a new-file create."
   },
-  "notCentralized": {
-    "comment": "Deliberately left per-project, not synced.",
-    "music_app_rn-webgpu-spike": "Experimental spike still on RN 0.81.x; keeps its own 0.81.9 rn-macos, 0.81.x svg/skia/audio-api, safe-area and react-native-webgpu+0.13.0 patches locally until it is ported to 0.83 (webgpu 0.13 -> 0.19 is a large jump)."
+  "notes": {
+    "music_app_rn-webgpu-spike": "Ported to RN 0.83.10 on 2026-10-28 (webgpu 0.13.0 -> 0.19.2); now a consumer of the shared music patches + its own webgpu patch, all macOS-build-validated. Pre-existing non-RN debt left as-is: `three/webgpu` has no shipped types (three 0.186 ships none), and 2 unit tests fail (i18n key parity, a Windows rendering assertion)."
   }
 }
