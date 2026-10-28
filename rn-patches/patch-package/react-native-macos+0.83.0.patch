@@ -1,0 +1,560 @@
+diff --git a/node_modules/react-native-macos/React/Fabric/Mounting/ComponentViews/Modal/RCTModalHostViewComponentView.mm b/node_modules/react-native-macos/React/Fabric/Mounting/ComponentViews/Modal/RCTModalHostViewComponentView.mm
+--- a/node_modules/react-native-macos/React/Fabric/Mounting/ComponentViews/Modal/RCTModalHostViewComponentView.mm
++++ b/node_modules/react-native-macos/React/Fabric/Mounting/ComponentViews/Modal/RCTModalHostViewComponentView.mm
+@@ -19,6 +19,11 @@
+ 
+ #import "RCTFabricModalHostViewController.h"
+ 
++#if TARGET_OS_OSX // [macOS
++#import <objc/runtime.h>
++#import <React/RCTSurfaceTouchHandler.h>
++#endif // macOS]
++
+ using namespace facebook::react;
+ 
+ #if !TARGET_OS_OSX // [macOS]
+@@ -95,6 +100,34 @@
+   return {orientation};
+ }
+ #endif // [macOS]
++
++#if TARGET_OS_OSX // [macOS
++/**
++ * The window a modal is presented in on macOS: a sheet on the host window.
++ *
++ * Upstream compiles the whole modal host out on macOS, so `<Modal>` had no
++ * native presentation there at all. A sheet is the platform's own shape for a
++ * dialog that belongs to one window. Escape asks JS to close, exactly as the
++ * iOS swipe-to-dismiss does, rather than closing on its own: `visible` stays the
++ * source of truth.
++ */
++@interface RCTModalSheetWindow : NSWindow
++@property (nonatomic, copy) void (^onCancel)(void);
++@end
++
++@implementation RCTModalSheetWindow
++- (BOOL)canBecomeKeyWindow
++{
++  return YES;
++}
++- (void)cancelOperation:(id)sender
++{
++  if (self.onCancel) {
++    self.onCancel();
++  }
++}
++@end
++#endif // macOS]
+ 
+ @interface RCTModalHostViewComponentView () <RCTFabricModalHostViewControllerDelegate>
+ 
+@@ -327,8 +360,297 @@
+     eventEmitter->onRequestClose({});
+   }
+ }
+-#endif // [macOS]
++#else // [macOS
++
++// The sheet, and the flipped view its React children are mounted into.
++static char kSheetKey;
++static char kContentKey;
++static char kTouchHandlerKey;
++
++- (instancetype)initWithFrame:(CGRect)frame
++{
++  if (self = [super initWithFrame:frame]) {
++    _props = ModalHostViewShadowNode::defaultSharedProps();
++    _isPresented = NO;
++    _shouldPresent = NO;
++  }
++  return self;
++}
++
++- (RCTModalSheetWindow *)sheet
++{
++  return objc_getAssociatedObject(self, &kSheetKey);
++}
++
++- (RCTUIView *)sheetContent
++{
++  RCTUIView *content = objc_getAssociatedObject(self, &kContentKey);
++  if (!content) {
++    content = [[RCTUIView alloc] initWithFrame:NSMakeRect(0, 0, 400, 300)];
++    objc_setAssociatedObject(self, &kContentKey, content, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
++    /*
++      The sheet is a separate window, so the surface's own touch handler —
++      attached to the root view in the main window — never sees its events.
++      Without one here every Pressable in a dialog was dead. iOS does the same
++      in RCTFabricModalHostViewController.
++    */
++    RCTSurfaceTouchHandler *touchHandler = [RCTSurfaceTouchHandler new];
++    [touchHandler attachToView:content];
++    objc_setAssociatedObject(self, &kTouchHandlerKey, touchHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
++  }
++  return content;
++}
++
++- (std::shared_ptr<const ModalHostViewEventEmitter>)modalEventEmitter
++{
++  if (!_eventEmitter) {
++    return nullptr;
++  }
++  return std::static_pointer_cast<const ModalHostViewEventEmitter>(_eventEmitter);
++}
++
++/**
++ * The largest a sheet may be: the host window's content, less a margin.
++ *
++ * The dialog is laid out in this box and the sheet then takes the size of what
++ * it drew — a confirm is small, a long form grows until it meets this and then
++ * scrolls its body. Whole points: the state stores a 32-bit float, and a
++ * fractional size that did not survive the round trip compared unequal on
++ * every update, committing another forever.
++ */
++- (NSSize)maximumSheetSize
++{
++  NSWindow *host = self.window;
++  NSSize available = host ? host.contentView.bounds.size : NSMakeSize(800, 600);
++  return NSMakeSize(floor(MAX(320, available.width - 80)), floor(MAX(200, available.height - 60)));
++}
++
++/**
++ * Sizes the sheet to the dialog it holds.
++ *
++ * Measured below the full-size wrappers: `<Modal>` wraps its children in a
++ * container that fills the whole box, so that container is always the maximum;
++ * the dialog is what is inside. Changing the sheet's size changes nothing React lays out — the
++ * box stays the maximum — so this cannot feed back into another layout.
++ */
++- (NSRect)dialogRectIn:(NSView *)view box:(NSSize)box relativeTo:(NSView *)content
++{
++  NSRect used = NSZeroRect;
++  for (NSView *child in view.subviews) {
++    NSSize size = child.frame.size;
++    if (size.width >= box.width - 1 && size.height >= box.height - 1) {
++      used = NSUnionRect(used, [self dialogRectIn:child box:box relativeTo:content]);
++    } else if (size.width > 0 && size.height > 0) {
++      used = NSUnionRect(used, [content convertRect:child.frame fromView:view]);
++    }
++  }
++  return used;
++}
++
++- (void)fitSheetToContent
++{
++  RCTModalSheetWindow *sheet = [self sheet];
++  RCTUIView *content = objc_getAssociatedObject(self, &kContentKey);
++  if (!sheet || !content) {
++    return;
++  }
++  /*
++    Through the wrappers that fill the box — `<Modal>`'s container, and in a
++    development build the `AppContainer` and its overlay — to the views that
++    are smaller than it, which are the dialog. A wrapper counts as full-size at
++    the box or larger: before the state lands it is still the screen's size.
++  */
++  NSSize box = [self maximumSheetSize];
++  NSRect used = [self dialogRectIn:content box:box relativeTo:content];
++  if (NSIsEmptyRect(used)) {
++    return;
++  }
++  NSSize size = NSMakeSize(ceil(MIN(box.width, NSMaxX(used))), ceil(MIN(box.height, NSMaxY(used))));
++  if (!NSEqualSizes(sheet.contentView.frame.size, size)) {
++    [sheet setContentSize:size];
++  }
++}
++
++/** Any view inside the dialog moved or resized: the dialog may have changed size. */
++- (void)descendantFrameDidChange:(NSNotification *)notification
++{
++  RCTUIView *content = objc_getAssociatedObject(self, &kContentKey);
++  NSView *view = notification.object;
++  if (content && [self sheet] && [view isKindOfClass:[NSView class]] && view != content &&
++      [view isDescendantOf:content]) {
++    [self fitSheetToContent];
++  }
++}
++
++- (void)updateStateToSize:(NSSize)size
++{
++  if (_state != nullptr) {
++    const auto current = _state->getData().screenSize;
++    if (fabs(current.width - size.width) >= 1 || fabs(current.height - size.height) >= 1) {
++      _state->updateState(ModalHostViewState{facebook::react::Size{(facebook::react::Float)size.width, (facebook::react::Float)size.height}});
++    }
++  }
++}
+ 
++/** Follows the host window, so a dialog is never larger than the window it sits in. */
++- (void)hostWindowDidResize:(NSNotification *)notification
++{
++  if (![self sheet]) {
++    return;
++  }
++  [self updateStateToSize:[self maximumSheetSize]];
++  [self fitSheetToContent];
++}
++
++- (void)dealloc
++{
++  [[NSNotificationCenter defaultCenter] removeObserver:self];
++}
++
++- (void)ensurePresentedOnlyIfNeeded
++{
++  NSWindow *host = self.window;
++  BOOL shouldBePresented = !_isPresented && _shouldPresent && host != nil;
++  if (shouldBePresented) {
++    _isPresented = YES;
++    NSSize maximum = [self maximumSheetSize];
++    [self updateStateToSize:maximum];
++    // A starting size only: the sheet takes the dialog's size as soon as it is laid out.
++    NSSize size = NSMakeSize(MIN(520, maximum.width), MIN(240, maximum.height));
++
++    RCTModalSheetWindow *sheet =
++        [[RCTModalSheetWindow alloc] initWithContentRect:NSMakeRect(0, 0, size.width, size.height)
++                                               styleMask:NSWindowStyleMaskTitled
++                                                 backing:NSBackingStoreBuffered
++                                                   defer:YES];
++    sheet.releasedWhenClosed = NO;
++    sheet.backgroundColor = NSColor.windowBackgroundColor;
++    /*
++      The React content sits inside a flipped holder, not directly as the
++      window's content view. RCTSurfaceTouchHandler converts a click into the
++      coordinate space of its root view's *superview* before hit-testing; in
++      the main window that is a flipped React view, and as a content view it
++      would be AppKit's unflipped frame view.
++    */
++    RCTUIView *holder = [[RCTUIView alloc] initWithFrame:NSMakeRect(0, 0, size.width, size.height)];
++    RCTUIView *content = [self sheetContent];
++    content.frame = holder.bounds;
++    content.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
++    [holder addSubview:content];
++    sheet.contentView = holder;
++    __weak __typeof(self) weakSelf = self;
++    sheet.onCancel = ^{
++      auto eventEmitter = [weakSelf modalEventEmitter];
++      if (eventEmitter) {
++        eventEmitter->onRequestClose({});
++      }
++    };
++    objc_setAssociatedObject(self, &kSheetKey, sheet, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
++    [[NSNotificationCenter defaultCenter] addObserver:self
++                                             selector:@selector(hostWindowDidResize:)
++                                                 name:NSWindowDidResizeNotification
++                                               object:host];
++    [[NSNotificationCenter defaultCenter] addObserver:self
++                                             selector:@selector(descendantFrameDidChange:)
++                                                 name:NSViewFrameDidChangeNotification
++                                               object:nil];
++    [self fitSheetToContent];
++    [host beginSheet:sheet completionHandler:nil];
++    auto eventEmitter = [self modalEventEmitter];
++    if (eventEmitter) {
++      eventEmitter->onShow(ModalHostViewEventEmitter::OnShow{});
++    }
++  }
++
++  BOOL shouldBeHidden = _isPresented && (!_shouldPresent || !self.superview || host == nil);
++  if (shouldBeHidden) {
++    _isPresented = NO;
++    [[NSNotificationCenter defaultCenter] removeObserver:self name:NSWindowDidResizeNotification object:nil];
++    [[NSNotificationCenter defaultCenter] removeObserver:self name:NSViewFrameDidChangeNotification object:nil];
++    RCTModalSheetWindow *sheet = [self sheet];
++    if (sheet) {
++      sheet.onCancel = nil;
++      if (sheet.sheetParent) {
++        [sheet.sheetParent endSheet:sheet];
++      }
++      [sheet orderOut:nil];
++      sheet.contentView = [[NSView alloc] initWithFrame:NSZeroRect];
++      objc_setAssociatedObject(self, &kSheetKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
++    }
++    auto eventEmitter = [self modalEventEmitter];
++    if (eventEmitter) {
++      eventEmitter->onDismiss(ModalHostViewEventEmitter::OnDismiss{});
++    }
++  }
++}
++
++- (void)viewDidMoveToWindow
++{
++  [super viewDidMoveToWindow];
++  [self ensurePresentedOnlyIfNeeded];
++}
++
++- (void)viewDidMoveToSuperview
++{
++  [super viewDidMoveToSuperview];
++  [self ensurePresentedOnlyIfNeeded];
++}
++
++// The host stays in the main window's tree with nothing in it; it must not eat clicks.
++- (NSView *)hitTest:(NSPoint)point
++{
++  return nil;
++}
++
++- (void)boundsDidChange:(CGRect)newBounds
++{
++}
++
+++ (ComponentDescriptorProvider)componentDescriptorProvider
++{
++  return concreteComponentDescriptorProvider<ModalHostViewComponentDescriptor>();
++}
++
++- (void)prepareForRecycle
++{
++  _shouldPresent = NO;
++  [self ensurePresentedOnlyIfNeeded];
++  [super prepareForRecycle];
++  _state.reset();
++  _isPresented = NO;
++}
++
++- (void)updateProps:(const Props::Shared &)props oldProps:(const Props::Shared &)oldProps
++{
++  const auto &newProps = static_cast<const ModalHostViewProps &>(*props);
++  _shouldPresent = newProps.visible;
++  [super updateProps:props oldProps:oldProps];
++  [self ensurePresentedOnlyIfNeeded];
++}
++
++- (void)updateState:(const facebook::react::State::Shared &)state
++           oldState:(const facebook::react::State::Shared &)oldState
++{
++  _state = std::static_pointer_cast<const ModalHostViewShadowNode::ConcreteState>(state);
++  if (_isPresented) {
++    [self updateStateToSize:[self maximumSheetSize]];
++  }
++}
++
++- (void)mountChildComponentView:(RCTUIView<RCTComponentViewProtocol> *)childComponentView index:(NSInteger)index
++{
++  RCTUIView *content = [self sheetContent];
++  [content addSubview:childComponentView positioned:NSWindowAbove
++           relativeTo:index > 0 && index <= (NSInteger)content.subviews.count ? content.subviews[index - 1] : nil];
++  [self fitSheetToContent];
++}
++
++- (void)unmountChildComponentView:(RCTUIView<RCTComponentViewProtocol> *)childComponentView index:(NSInteger)index
++{
++  [childComponentView removeFromSuperview];
++}
++#endif // macOS]
++
+ @end
+ 
+ #ifdef __cplusplus
+diff --git a/node_modules/react-native-macos/React/Fabric/Mounting/ComponentViews/View/RCTViewComponentView.mm b/node_modules/react-native-macos/React/Fabric/Mounting/ComponentViews/View/RCTViewComponentView.mm
+--- a/node_modules/react-native-macos/React/Fabric/Mounting/ComponentViews/View/RCTViewComponentView.mm
++++ b/node_modules/react-native-macos/React/Fabric/Mounting/ComponentViews/View/RCTViewComponentView.mm
+@@ -801,6 +801,25 @@
+   _isJSResponder = NO;
+   _removeClippedSubviews = NO;
+   _reactSubviews = [NSMutableArray new];
++
++#if TARGET_OS_OSX // [macOS
++  // [Moosiac] Hover state is the last occupant's, not the next one's. A view
++  // taken off screen under the pointer (a row clicked to leave its list) never
++  // receives mouseExited:, so it returns to the recycle pool with _hasMouseOver
++  // still YES; reused for another row, mouseEntered: returns early and that row
++  // never reports the pointer arriving. Reset the mouse-tracking state here.
++  if (_trackingArea) {
++    [self removeTrackingArea:_trackingArea];
++    _trackingArea = nil;
++  }
++  _hasMouseOver = NO;
++  if (_hasClipViewBoundsObserver) {
++    _hasClipViewBoundsObserver = NO;
++    [[NSNotificationCenter defaultCenter] removeObserver:self
++                                                    name:NSViewBoundsDidChangeNotification
++                                                  object:nil];
++  }
++#endif // macOS]
+ }
+ 
+ - (void)setPropKeysManagedByAnimated_DO_NOT_USE_THIS_IS_BROKEN:(NSSet<NSString *> *_Nullable)props
+diff --git a/node_modules/react-native-macos/ReactCommon/react/renderer/core/ShadowNode.cpp b/node_modules/react-native-macos/ReactCommon/react/renderer/core/ShadowNode.cpp
+--- a/node_modules/react-native-macos/ReactCommon/react/renderer/core/ShadowNode.cpp
++++ b/node_modules/react-native-macos/ReactCommon/react/renderer/core/ShadowNode.cpp
+@@ -16,6 +16,8 @@
+ #include <react/renderer/debug/DebugStringConvertible.h>
+ #include <react/renderer/debug/debugStringConvertibleUtils.h>
+ 
++#include <mutex>
++#include <optional>
+ #include <utility>
+ 
+ namespace facebook::react {
+@@ -140,13 +142,22 @@
+     const ShadowNodeFragment& fragment) const {
+   const auto& family = *family_;
+   const auto& componentDescriptor = family.componentDescriptor_;
+-  if (family.nativeProps_DEPRECATED != nullptr) {
++  // [macOS] Copied under the family's lock: `setNativeProps` may replace it on
++  // another thread while this runs.
++  std::optional<folly::dynamic> nativeProps;
++  {
++    std::lock_guard<std::mutex> lock(family.nativePropsMutex_DEPRECATED);
++    if (family.nativeProps_DEPRECATED != nullptr) {
++      nativeProps = *family.nativeProps_DEPRECATED;
++    }
++  }
++  if (nativeProps.has_value()) {
+     auto propsParserContext = PropsParserContext{family_->getSurfaceId(), {}};
+     if (fragment.props == ShadowNodeFragment::propsPlaceholder()) {
+       // Clone existing `props_` with `family.nativeProps_DEPRECATED` to apply
+       // previously set props via `setNativeProps` API.
+       auto props = componentDescriptor.cloneProps(
+-          propsParserContext, props_, RawProps(*family.nativeProps_DEPRECATED));
++          propsParserContext, props_, RawProps(*nativeProps));
+       auto clonedNode = componentDescriptor.cloneShadowNode(
+           *this,
+           {.props = props,
+diff --git a/node_modules/react-native-macos/ReactCommon/react/renderer/core/ShadowNodeFamily.h b/node_modules/react-native-macos/ReactCommon/react/renderer/core/ShadowNodeFamily.h
+--- a/node_modules/react-native-macos/ReactCommon/react/renderer/core/ShadowNodeFamily.h
++++ b/node_modules/react-native-macos/ReactCommon/react/renderer/core/ShadowNodeFamily.h
+@@ -8,6 +8,7 @@
+ #pragma once
+ 
+ #include <memory>
++#include <mutex>
+ #include <shared_mutex>
+ 
+ #include <react/renderer/core/EventEmitter.h>
+@@ -115,6 +116,17 @@
+    */
+   mutable std::unique_ptr<folly::dynamic> nativeProps_DEPRECATED;
+ 
++  /*
++   * Guards `nativeProps_DEPRECATED`. [macOS]
++   *
++   * `setNativeProps` replaces it on the JS thread while a layout pass on the
++   * main thread copies it inside `ShadowNode::clone` — a window resize runs that
++   * layout synchronously on the main thread, so the copy read freed memory and
++   * the app crashed in `folly::dynamic::type()`. Every read and write of the
++   * pointer or its value happens under this lock.
++   */
++  mutable std::mutex nativePropsMutex_DEPRECATED;
++
+   /**
+    * @return tag for the ShadowNodeFamily.
+    */
+diff --git a/node_modules/react-native-macos/ReactCommon/react/renderer/uimanager/UIManager.cpp b/node_modules/react-native-macos/ReactCommon/react/renderer/uimanager/UIManager.cpp
+--- a/node_modules/react-native-macos/ReactCommon/react/renderer/uimanager/UIManager.cpp
++++ b/node_modules/react-native-macos/ReactCommon/react/renderer/uimanager/UIManager.cpp
+@@ -7,6 +7,9 @@
+ 
+ #include "UIManager.h"
+ 
++#include <mutex>
++#include <optional>
++
+ #include <cxxreact/JSExecutor.h>
+ #include <cxxreact/TraceSection.h>
+ #include <react/debug/react_native_assert.h>
+@@ -120,7 +123,21 @@
+   auto props = ShadowNodeFragment::propsPlaceholder();
+ 
+   if (!rawProps.isEmpty()) {
+-    if (family.nativeProps_DEPRECATED != nullptr) {
++    // [macOS] The whole read-merge-write, and the copy used below, under the
++    // family's lock: see `ShadowNodeFamily::nativePropsMutex_DEPRECATED`.
++    std::optional<folly::dynamic> nativeProps;
++    {
++      std::lock_guard<std::mutex> lock(family.nativePropsMutex_DEPRECATED);
++      if (family.nativeProps_DEPRECATED != nullptr) {
++        family.nativeProps_DEPRECATED =
++            std::make_unique<folly::dynamic>(mergeDynamicProps(
++                *family.nativeProps_DEPRECATED, // source
++                (folly::dynamic)rawProps, // patch
++                NullValueStrategy::Ignore));
++        nativeProps = *family.nativeProps_DEPRECATED;
++      }
++    }
++    if (nativeProps.has_value()) {
+       // 1. update the nativeProps_DEPRECATED props.
+       //
+       // In this step, we want the most recent value for the props
+@@ -134,11 +151,7 @@
+       // present in `nativeProps_DEPRECATED`, it will not be added.
+       //
+       // The result of this operation is the new `nativeProps_DEPRECATED`.
+-      family.nativeProps_DEPRECATED =
+-          std::make_unique<folly::dynamic>(mergeDynamicProps(
+-              *family.nativeProps_DEPRECATED, // source
+-              (folly::dynamic)rawProps, // patch
+-              NullValueStrategy::Ignore));
++      // [macOS] Done above, under the lock.
+ 
+       // 2. Compute the final set of props.
+       //
+@@ -150,7 +163,7 @@
+       // We use these finalProps as source of truth for the component.
+       auto finalProps = mergeDynamicProps(
+           (folly::dynamic)rawProps, // source
+-          *family.nativeProps_DEPRECATED, // patch
++          *nativeProps, // patch
+           NullValueStrategy::Override);
+ 
+       // 3. Clone the props by using finalProps.
+@@ -428,6 +441,8 @@
+     const std::shared_ptr<const ShadowNode>& shadowNode,
+     RawProps rawProps) const {
+   auto& family = shadowNode->getFamily();
++  // [macOS] See `ShadowNodeFamily::nativePropsMutex_DEPRECATED`.
++  std::unique_lock<std::mutex> nativePropsLock(family.nativePropsMutex_DEPRECATED);
+   if (family.nativeProps_DEPRECATED) {
+     // Values in `rawProps` patch (take precedence over)
+     // `nativeProps_DEPRECATED`. For example, if both `nativeProps_DEPRECATED`
+@@ -442,6 +457,8 @@
+     family.nativeProps_DEPRECATED =
+         std::make_unique<folly::dynamic>((folly::dynamic)rawProps);
+   }
++  // Released before committing: the commit clones nodes, which takes this lock.
++  nativePropsLock.unlock();
+ 
+   shadowTreeRegistry_.visit(
+       family.getSurfaceId(), [&](const ShadowTree& shadowTree) {
+diff --git a/node_modules/react-native-macos/scripts/codegen/generate-artifacts-executor/generateRCTThirdPartyComponents.js b/node_modules/react-native-macos/scripts/codegen/generate-artifacts-executor/generateRCTThirdPartyComponents.js
+--- a/node_modules/react-native-macos/scripts/codegen/generate-artifacts-executor/generateRCTThirdPartyComponents.js
++++ b/node_modules/react-native-macos/scripts/codegen/generate-artifacts-executor/generateRCTThirdPartyComponents.js
+@@ -138,7 +138,7 @@
+     .flatMap(library => {
+       const components = componentsInLibraries[library];
+       return components.map(({componentName, className}) => {
+-        return `\t\t@"${componentName}": NSClassFromString(@"${className}"), // ${library}`;
++        return `\t\t@[@"${componentName}", @"${className}"], // ${library}`;
+       });
+     })
+     .join('\n');
+diff --git a/node_modules/react-native-macos/scripts/codegen/templates/RCTThirdPartyComponentsProviderMM.template b/node_modules/react-native-macos/scripts/codegen/templates/RCTThirdPartyComponentsProviderMM.template
+--- a/node_modules/react-native-macos/scripts/codegen/templates/RCTThirdPartyComponentsProviderMM.template
++++ b/node_modules/react-native-macos/scripts/codegen/templates/RCTThirdPartyComponentsProviderMM.template
+@@ -19,9 +19,22 @@
+   static dispatch_once_t nativeComponentsToken;
+ 
+   dispatch_once(&nativeComponentsToken, ^{
+-    thirdPartyComponents = @{
++    // [macOS] Codegen runs with the iOS platform for a macOS build, so this list
++    // names components from libraries that have no macOS implementation and
++    // are not linked (react-native-screens, the community slider). Their
++    // classes are nil here, and a nil in a dictionary literal aborts the app at
++    // the first render. Skip what is not linked instead.
++    NSArray<NSArray<NSString *> *> *candidates = @[
+ {thirdPartyComponentsMapping}
+-    };
++    ];
++    NSMutableDictionary<NSString *, Class<RCTComponentViewProtocol>> *found = [NSMutableDictionary new];
++    for (NSArray<NSString *> *pair in candidates) {
++      Class componentClass = NSClassFromString(pair[1]);
++      if (componentClass != nil) {
++        found[pair[0]] = componentClass;
++      }
++    }
++    thirdPartyComponents = [found copy];
+   });
+ 
+   return thirdPartyComponents;

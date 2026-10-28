@@ -1,0 +1,558 @@
+diff --git a/node_modules/react-native-audio-api/RNAudioAPI.podspec b/node_modules/react-native-audio-api/RNAudioAPI.podspec
+index 85e28e4..487ebeb 100644
+--- a/node_modules/react-native-audio-api/RNAudioAPI.podspec
++++ b/node_modules/react-native-audio-api/RNAudioAPI.podspec
+@@ -11,6 +11,9 @@ $RN_AUDIO_API_STATIC_EXTERNAL_LIBS_DISABLED = ENV['DISABLE_AUDIOAPI_STATIC_EXTER
+ fabric_flags = $new_arch_enabled ? '-DRCT_NEW_ARCH_ENABLED' : ''
+ version_flag = "-DAUDIOAPI_VERSION=#{package_json['version']}"
+ ios_min_version = '14.0'
++# AVAudioSourceNode is 10.15+; 11.0 is the first version react-native-macos
++# targets, so nothing is gained by going lower.
++osx_min_version = '11.0'
+ 
+ worklets_enabled = $audio_api_config[:worklets_enabled]
+ worklets_preprocessor_flag = worklets_enabled ? '-DRN_AUDIO_API_ENABLE_WORKLETS=1' : ''
+@@ -28,7 +31,7 @@ Pod::Spec.new do |s|
+   s.license      = package_json["license"]
+   s.authors      = package_json["author"]
+ 
+-  s.platforms    = { :ios => ios_min_version }
++  s.platforms    = { :ios => ios_min_version, :osx => osx_min_version }
+   s.source       = { :git => "https://github.com/software-mansion/react-native-audio-api.git", :tag => "#{s.version}" }
+ 
+   s.subspec "audioapi" do |ss|
+@@ -38,7 +41,15 @@ Pod::Spec.new do |s|
+     ss.header_mappings_dir = "common/cpp/audioapi"
+ 
+     ss.subspec "ios" do |sss|
+-      sss.source_files = "ios/audioapi/**/*.{mm,h,m,hpp}"
++      sss.ios.source_files = "ios/audioapi/**/*.{mm,h,m,hpp}"
++      # macOS builds every Apple source. Three of them are iOS-only concepts —
++      # the audio session, the now-playing notification, and the interruption
++      # observer — and each compiles to a no-op under TARGET_OS_OSX rather than
++      # being excluded. Excluding them was tried first and only moved the
++      # failure from the compiler to the linker: `AudioAPIModule` constructs a
++      # notification manager unconditionally, and `NotificationRegistry` builds
++      # a playback notification by name, so both classes have to exist.
++      sss.osx.source_files = "ios/audioapi/**/*.{mm,h,m,hpp}"
+       sss.header_dir = "audioapi"
+       sss.header_mappings_dir = "ios/audioapi"
+     end
+@@ -64,6 +75,9 @@ Pod::Spec.new do |s|
+   end
+ 
+   s.ios.frameworks = 'Accelerate', 'AVFoundation', 'MediaPlayer'
++  # No MediaPlayer: that framework carries the now-playing centre, which is the
++  # half deliberately not built here.
++  s.osx.frameworks = 'Accelerate', 'AVFoundation'
+ 
+   s.prepare_command = <<-CMD
+     chmod +x scripts/download-prebuilt-binaries.sh
+diff --git a/node_modules/react-native-audio-api/ios/audioapi/ios/core/NativeAudioRecorder.m b/node_modules/react-native-audio-api/ios/audioapi/ios/core/NativeAudioRecorder.m
+index d572472..e895770 100644
+--- a/node_modules/react-native-audio-api/ios/audioapi/ios/core/NativeAudioRecorder.m
++++ b/node_modules/react-native-audio-api/ios/audioapi/ios/core/NativeAudioRecorder.m
+@@ -1,3 +1,4 @@
++#import <TargetConditionals.h>
+ #import <audioapi/ios/core/NativeAudioRecorder.h>
+ #import <audioapi/ios/system/AudioEngine.h>
+ 
+@@ -57,6 +58,7 @@ - (AVAudioFormat *)getResolvedInputFormat
+ 
+ - (int)getBufferSize
+ {
++#if !TARGET_OS_OSX
+   // NOTE: this method should be called only after the session is activated
+   AVAudioSession *audioSession = [AVAudioSession sharedInstance];
+ 
+@@ -68,6 +70,14 @@ - (int)getBufferSize
+ 
+   // IOS returns buffer duration rounded, but expects the buffer size to be power of two in runtime
+   return nextPowerOfTwo(ceil(bufferDuration * audioSession.sampleRate));
++#else
++  // macOS has no AVAudioSession to report a device-chosen buffer duration, so
++  // this uses the same 200ms floor the iOS "TMPfix" above falls back to,
++  // against the resolved input format's own sample rate rather than a
++  // session's.
++  float bufferDuration = 0.2;
++  return nextPowerOfTwo(ceil(bufferDuration * self.resolvedInputFormat.sampleRate));
++#endif
+ }
+ 
+ - (int)getResolvedBufferSize
+diff --git a/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioEngine.mm b/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioEngine.mm
+index d91ed60..c25fe93 100644
+--- a/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioEngine.mm
++++ b/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioEngine.mm
+@@ -1,3 +1,4 @@
++#import <TargetConditionals.h>
+ #import <audioapi/ios/system/AudioEngine.h>
+ #import <audioapi/ios/system/AudioSessionManager.h>
+ 
+@@ -551,7 +552,6 @@ - (void)restartAudioEngine
+ - (void)logAudioEngineState
+ {
+   std::scoped_lock lock(_engineLock);
+-  AVAudioSession *session = [AVAudioSession sharedInstance];
+ 
+   NSLog(@"================ 🎧 AVAudioEngine STATE ================");
+ 
+@@ -560,6 +560,11 @@ - (void)logAudioEngineState
+       @"➡️ engine.isInManualRenderingMode: %@",
+       self.audioEngine.isInManualRenderingMode ? @"true" : @"false");
+ 
++#if !TARGET_OS_OSX
++  // The session and its route are iOS-only concepts; macOS logs just the
++  // engine and format state above and below.
++  AVAudioSession *session = [AVAudioSession sharedInstance];
++
+   NSLog(@"🎚️ Session category: %@", session.category);
+   NSLog(@"🎚️ Session mode: %@", session.mode);
+   NSLog(@"🎚️ Session sampleRate: %f Hz", session.sampleRate);
+@@ -576,6 +581,7 @@ - (void)logAudioEngineState
+   for (AVAudioSessionPortDescription *input in route.inputs) {
+     NSLog(@"  Input: %@ (%@)", input.portType, input.portName);
+   }
++#endif
+ 
+   AVAudioFormat *format = [self.audioEngine.outputNode inputFormatForBus:0];
+   NSLog(@"📐 Engine output format: %.0f Hz, %u channels", format.sampleRate, format.channelCount);
+diff --git a/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioSessionManager.h b/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioSessionManager.h
+index e3ff5bc..2be5bd0 100644
+--- a/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioSessionManager.h
++++ b/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioSessionManager.h
+@@ -1,8 +1,12 @@
+ #pragma once
+ 
+-#import <AVFoundation/AVFoundation.h>
+ #import <Foundation/Foundation.h>
+ #import <React/RCTBridgeModule.h>
++#import <TargetConditionals.h>
++
++#if !TARGET_OS_OSX
++
++#import <AVFoundation/AVFoundation.h>
+ 
+ @interface AudioSessionManager : NSObject
+ 
+@@ -57,3 +61,54 @@
+                 reject:(RCTPromiseRejectBlock)reject;
+ 
+ @end
++
++#else
++
++// macOS has no AVAudioSession — there is no shared, app-wide "audio session" to
++// configure, activate or interrupt at all, so every AVAudioSession-typed
++// property and method below simply doesn't exist here. What's left is the
++// surface `AudioAPIModule.mm` actually calls (see the patch this lives in for
++// the full accounting): a class that constructs, tracks two booleans nothing
++// else reads authoritatively, and answers every session-shaped question with
++// an honest "there is no session" rather than pretending to be iOS.
++@interface AudioSessionManager : NSObject
++
++@property (nonatomic, assign) bool isActive;
++@property (nonatomic, assign) bool shouldManageSession;
++
++- (instancetype)init;
+++ (instancetype)sharedInstance;
++
++- (void)cleanup;
++
++- (void)setAudioSessionOptions:(NSString *)category
++                          mode:(NSString *)mode
++                       options:(NSArray *)options
++                  allowHaptics:(BOOL)allowHaptics
++    notifyOthersOnDeactivation:(BOOL)notifyOthersOnDeactivation;
++
++- (bool)configureAudioSession:(NSError **)outError;
++- (bool)ensureActive:(bool)force error:(NSError **)error;
++- (bool)setActive:(bool)active error:(NSError **)error;
++- (void)markInactive;
++- (void)disableSessionManagement;
++
++- (NSNumber *)getDevicePreferredSampleRate;
++- (NSString *)inputDiagnosticsSnapshot;
++
++- (void)requestRecordingPermissions:(RCTPromiseResolveBlock)resolve
++                             reject:(RCTPromiseRejectBlock)reject;
++- (NSString *)requestRecordingPermissions;
++
++- (void)checkRecordingPermissions:(RCTPromiseResolveBlock)resolve
++                           reject:(RCTPromiseRejectBlock)reject;
++- (NSString *)checkRecordingPermissions;
++
++- (void)getDevicesInfo:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject;
++- (void)setInputDevice:(NSString *)deviceId
++               resolve:(RCTPromiseResolveBlock)resolve
++                reject:(RCTPromiseRejectBlock)reject;
++
++@end
++
++#endif
+diff --git a/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioSessionManager.mm b/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioSessionManager.mm
+index d115837..b1a2ef8 100644
+--- a/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioSessionManager.mm
++++ b/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioSessionManager.mm
+@@ -1,6 +1,10 @@
++#import <TargetConditionals.h>
++#import <audioapi/ios/system/AudioSessionManager.h>
++
++#if !TARGET_OS_OSX
++
+ #import <AVFAudio/AVFAudio.h>
+ #import <audioapi/ios/system/AudioEngine.h>
+-#import <audioapi/ios/system/AudioSessionManager.h>
+ 
+ @interface AudioSessionManager ()
+ 
+@@ -561,3 +565,130 @@ - (AVAudioSessionCategoryOptions)optionsFromArray:(NSArray *)optionsArray
+   return options;
+ }
+ @end
++
++#else
++
++// macOS has no AVAudioSession. Every method below is a deliberately honest
++// stand-in for the iOS implementation above — see AudioSessionManager.h for
++// why the surface is this small: it is exactly what AudioAPIModule.mm calls.
++@implementation AudioSessionManager
++
++static AudioSessionManager *_sharedInstance = nil;
++
++- (instancetype)init
++{
++  if (self = [super init]) {
++    self.isActive = false;
++    self.shouldManageSession = true;
++  }
++
++  _sharedInstance = self;
++  return self;
++}
++
+++ (instancetype)sharedInstance
++{
++  return _sharedInstance;
++}
++
++- (void)cleanup
++{
++}
++
++- (void)setAudioSessionOptions:(NSString *)category
++                          mode:(NSString *)mode
++                       options:(NSArray *)options
++                  allowHaptics:(BOOL)allowHaptics
++    notifyOthersOnDeactivation:(BOOL)notifyOthersOnDeactivation
++{
++  // No session to configure.
++}
++
++- (bool)configureAudioSession:(NSError **)outError
++{
++  return true;
++}
++
++- (bool)ensureActive:(bool)force error:(NSError **)error
++{
++  self.isActive = true;
++  return true;
++}
++
++- (bool)setActive:(bool)active error:(NSError **)error
++{
++  self.isActive = active;
++  return true;
++}
++
++- (void)markInactive
++{
++  self.isActive = false;
++}
++
++- (void)disableSessionManagement
++{
++  self.shouldManageSession = false;
++}
++
++- (NSNumber *)getDevicePreferredSampleRate
++{
++  // The standard CoreAudio default output rate. Nothing here queries the
++  // actual output device: playback goes through this app's own synth
++  // (FluidSynth via `native/synth`), which picks its own rate independent of
++  // whatever an AVAudioSession would have reported on iOS.
++  return @44100.0;
++}
++
++- (NSString *)inputDiagnosticsSnapshot
++{
++  return @"session management not used on macOS (no AVAudioSession)";
++}
++
++- (void)requestRecordingPermissions:(RCTPromiseResolveBlock)resolve
++                             reject:(RCTPromiseRejectBlock)reject
++{
++  // Microphone access on macOS goes through AVCaptureDevice's own
++  // authorization, not AVAudioSession — genuinely unimplemented here rather
++  // than silently claiming an access this class never checked.
++  resolve(@"Denied");
++}
++
++- (NSString *)requestRecordingPermissions
++{
++  return @"Denied";
++}
++
++- (void)checkRecordingPermissions:(RCTPromiseResolveBlock)resolve
++                           reject:(RCTPromiseRejectBlock)reject
++{
++  resolve(@"Denied");
++}
++
++- (NSString *)checkRecordingPermissions
++{
++  return @"Denied";
++}
++
++- (void)getDevicesInfo:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject
++{
++  // Honestly empty rather than fabricated: this class does no device
++  // enumeration on macOS.
++  resolve(@{
++    @"availableInputs" : @[],
++    @"currentInputs" : @[],
++    @"availableOutputs" : @[],
++    @"currentOutputs" : @[],
++  });
++}
++
++- (void)setInputDevice:(NSString *)deviceId
++               resolve:(RCTPromiseResolveBlock)resolve
++                reject:(RCTPromiseRejectBlock)reject
++{
++  reject(nil, @"Selecting an input device is not supported on macOS.", nil);
++}
++
++@end
++
++#endif
+diff --git a/node_modules/react-native-audio-api/ios/audioapi/ios/system/SystemNotificationManager.h b/node_modules/react-native-audio-api/ios/audioapi/ios/system/SystemNotificationManager.h
+index 5ddf0d4..2a9c0ed 100644
+--- a/node_modules/react-native-audio-api/ios/audioapi/ios/system/SystemNotificationManager.h
++++ b/node_modules/react-native-audio-api/ios/audioapi/ios/system/SystemNotificationManager.h
+@@ -1,10 +1,14 @@
+ #pragma once
+ 
+-#import <AVFoundation/AVFoundation.h>
+ #import <Foundation/Foundation.h>
++#import <TargetConditionals.h>
+ 
+ @class AudioAPIModule;
+ 
++#if !TARGET_OS_OSX
++
++#import <AVFoundation/AVFoundation.h>
++
+ @interface SystemNotificationManager : NSObject
+ 
+ @property (nonatomic, weak) AudioAPIModule *audioAPIModule;
+@@ -29,3 +33,26 @@
+                        context:(void *)context;
+ 
+ @end
++
++#else
++
++// macOS has no AVAudioSession, so there is nothing here to observe: no route
++// changes, no interruptions, no secondary-audio hint, no session-scoped
++// volume KVO. `AudioAPIModule.mm` constructs this class and calls its three
++// `observe*`/`activelyReclaimSession:` toggles unconditionally, so the class
++// and that surface still have to exist — as no-ops, honestly, rather than
++// excluded and missing.
++@interface SystemNotificationManager : NSObject
++
++@property (nonatomic, weak) AudioAPIModule *audioAPIModule;
++
++- (instancetype)initWithAudioAPIModule:(AudioAPIModule *)audioAPIModule;
++- (void)cleanup;
++
++- (void)observeAudioInterruptions:(BOOL)enabled;
++- (void)activelyReclaimSession:(BOOL)enabled;
++- (void)observeVolumeChanges:(BOOL)enabled;
++
++@end
++
++#endif
+diff --git a/node_modules/react-native-audio-api/ios/audioapi/ios/system/SystemNotificationManager.mm b/node_modules/react-native-audio-api/ios/audioapi/ios/system/SystemNotificationManager.mm
+index 6761a43..ab71649 100644
+--- a/node_modules/react-native-audio-api/ios/audioapi/ios/system/SystemNotificationManager.mm
++++ b/node_modules/react-native-audio-api/ios/audioapi/ios/system/SystemNotificationManager.mm
+@@ -1,8 +1,12 @@
++#import <TargetConditionals.h>
++#import <audioapi/ios/system/SystemNotificationManager.h>
++
++#if !TARGET_OS_OSX
++
+ #import <audioapi/events/AudioEvent.h>
+ #import <audioapi/ios/AudioAPIModule.h>
+ #import <audioapi/ios/system/AudioEngine.h>
+ #import <audioapi/ios/system/AudioSessionManager.h>
+-#import <audioapi/ios/system/SystemNotificationManager.h>
+ 
+ @implementation SystemNotificationManager
+ 
+@@ -305,3 +309,38 @@ - (void)checkSecondaryAudioHint
+ }
+ 
+ @end
++
++#else
++
++// macOS has no AVAudioSession, so there is nothing here to observe or react
++// to. See SystemNotificationManager.h for why the class still has to exist.
++@implementation SystemNotificationManager
++
++- (instancetype)initWithAudioAPIModule:(AudioAPIModule *)audioAPIModule
++{
++  if (self = [super init]) {
++    self.audioAPIModule = audioAPIModule;
++  }
++
++  return self;
++}
++
++- (void)cleanup
++{
++}
++
++- (void)observeAudioInterruptions:(BOOL)enabled
++{
++}
++
++- (void)activelyReclaimSession:(BOOL)enabled
++{
++}
++
++- (void)observeVolumeChanges:(BOOL)enabled
++{
++}
++
++@end
++
++#endif
+diff --git a/node_modules/react-native-audio-api/ios/audioapi/ios/system/notification/PlaybackNotification.h b/node_modules/react-native-audio-api/ios/audioapi/ios/system/notification/PlaybackNotification.h
+index efa0492..940ef5d 100644
+--- a/node_modules/react-native-audio-api/ios/audioapi/ios/system/notification/PlaybackNotification.h
++++ b/node_modules/react-native-audio-api/ios/audioapi/ios/system/notification/PlaybackNotification.h
+@@ -1,11 +1,15 @@
+ #pragma once
+ 
+ #import <Foundation/Foundation.h>
+-#import <MediaPlayer/MediaPlayer.h>
++#import <TargetConditionals.h>
+ #import <audioapi/ios/system/notification/BaseNotification.h>
+ 
+ @class AudioAPIModule;
+ 
++#if !TARGET_OS_OSX
++
++#import <MediaPlayer/MediaPlayer.h>
++
+ /**
+  * PlaybackNotification
+  *
+@@ -25,3 +29,22 @@
+ - (instancetype)initWithAudioAPIModule:(AudioAPIModule *)audioAPIModule;
+ 
+ @end
++
++#else
++
++// MediaPlayer (MPNowPlayingInfoCenter, the lock-screen/Control Center now-
++// playing surface) doesn't exist on macOS — there is no lock screen. This
++// conforms to the same <BaseNotification> protocol `NotificationRegistry`
++// dispatches through, so it still registers as the "playback" notification
++// type, and every call on it is an honest no-op rather than the type being
++// missing from the registry entirely.
++@interface PlaybackNotification : NSObject <BaseNotification>
++
++@property (nonatomic, weak) AudioAPIModule *audioAPIModule;
++@property (nonatomic, assign) BOOL isActive;
++
++- (instancetype)initWithAudioAPIModule:(AudioAPIModule *)audioAPIModule;
++
++@end
++
++#endif
+diff --git a/node_modules/react-native-audio-api/ios/audioapi/ios/system/notification/PlaybackNotification.mm b/node_modules/react-native-audio-api/ios/audioapi/ios/system/notification/PlaybackNotification.mm
+index ce533ba..8443dd5 100644
+--- a/node_modules/react-native-audio-api/ios/audioapi/ios/system/notification/PlaybackNotification.mm
++++ b/node_modules/react-native-audio-api/ios/audioapi/ios/system/notification/PlaybackNotification.mm
+@@ -1,6 +1,9 @@
++#import <TargetConditionals.h>
+ #import <audioapi/ios/AudioAPIModule.h>
+ #import <audioapi/ios/system/notification/PlaybackNotification.h>
+ 
++#if !TARGET_OS_OSX
++
+ #define NOW_PLAYING_INFO_KEYS \
+   @{ \
+     @"title" : MPMediaItemPropertyTitle, \
+@@ -414,3 +417,56 @@ - (MPRemoteCommandHandlerStatus)onChangePlaybackPosition:
+ }
+ 
+ @end
++
++#else
++
++// macOS has no MPNowPlayingInfoCenter/MPRemoteCommandCenter (no lock screen,
++// no Control Center) — see PlaybackNotification.h for why the class still
++// exists and conforms to <BaseNotification>.
++@implementation PlaybackNotification
++
++- (instancetype)initWithAudioAPIModule:(AudioAPIModule *)audioAPIModule
++{
++  if (self = [super init]) {
++    self.audioAPIModule = audioAPIModule;
++    self.isActive = false;
++  }
++
++  return self;
++}
++
++- (BOOL)initializeWithOptions:(NSDictionary *)options
++{
++  return true;
++}
++
++- (BOOL)showWithOptions:(NSDictionary *)options
++{
++  self.isActive = true;
++  return true;
++}
++
++- (BOOL)hide
++{
++  self.isActive = false;
++  return true;
++}
++
++- (void)cleanup
++{
++  self.isActive = false;
++}
++
++- (BOOL)isActive
++{
++  return _isActive;
++}
++
++- (NSString *)getNotificationType
++{
++  return @"playback";
++}
++
++@end
++
++#endif

@@ -1,0 +1,23 @@
+diff --git a/node_modules/react-native-bottom-tabs/.bun-tag-10e7a9196a99b89b b/.bun-tag-10e7a9196a99b89b
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/ios/TabViewImpl.swift b/ios/TabViewImpl.swift
+index 6de510d0190ee9fc99b99a68f2e8f021c3776391..d7f4e020b81ce6a5238cb38a0c48ea46eb15ba5b 100644
+--- a/ios/TabViewImpl.swift
++++ b/ios/TabViewImpl.swift
+@@ -65,6 +65,15 @@ struct TabViewImpl: View {
+         #if !os(macOS)
+           tabController.view.backgroundColor = .clear
+           tabController.viewControllers?.forEach { $0.view.backgroundColor = .clear }
++          // Keep the classic bottom tab bar in any regular-width layout — iPad,
++          // and wide iPhones such as the iPhone Duo. iOS 18+ otherwise renders a
++          // top tab bar (or a sidebar with .sidebarAdaptable); forcing the
++          // compact horizontal size class puts it back at the bottom with icons,
++          // matching a phone. A no-op where the layout is already compact.
++          // Skipped when the app opts into the sidebar style.
++          if #available(iOS 17.0, *), props.sidebarAdaptable != true {
++            tabController.traitOverrides.horizontalSizeClass = .compact
++          }
+         #endif
+         #if os(macOS)
+           tabBar = tabController

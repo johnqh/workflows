@@ -1,0 +1,57 @@
+{
+  "comment": "Canonical React Native dependency patches shared across the family. Each entry names the canonical patch file (under bun/ or patch-package/), the mechanism that consumes it, and the sibling projects (relative to ~/projects) that vendor a copy. scripts/sync_rn_patches.sh copies the canonical file into each consumer's patches/ dir so every project stays byte-identical. Patches stay vendored per-project (bun's patchedDependencies, and patch-package, both need the file physically present, and CI runs `bun install --frozen-lockfile` with no access to this repo) -- this is a single source of truth plus a sync step, not a runtime dependency.",
+  "patches": [
+    {
+      "file": "bun/react-native-bottom-tabs@1.5.0.patch",
+      "mechanism": "bun",
+      "package": "react-native-bottom-tabs",
+      "version": "1.5.0",
+      "why": "Native Swift fix in ios/TabViewImpl.swift (compile-level; cannot be swizzled). Must stay until fixed upstream in a release the family adopts.",
+      "consumers": [
+        "genuivo_app_rn",
+        "mogulgame_app_rn",
+        "raidr_agent_app_rn",
+        "sudojo_app_rn",
+        "svgr_app_rn",
+        "testomniac_app_rn",
+        "wcprediction_app_rn",
+        "tapayoka_buyer_app_rn",
+        "tapayoka_vendor_app_rn"
+      ]
+    },
+    {
+      "file": "patch-package/react-native-macos+0.83.0.patch",
+      "mechanism": "patch-package",
+      "package": "react-native-macos",
+      "version": "0.83.0",
+      "why": "C++ ReactCommon renderer fixes (ShadowNode/ShadowNodeFamily/UIManager nativeProps_DEPRECATED mutex) + Modal sheet + View recycle hover-reset (compile-level; cannot be swizzled). Re-ported from 0.81.9 to 0.83.0 on 2026-10-27 and validated by a macOS xcodebuild. Also carries the nil-class codegen hunk, kept here (not yet relying on @sudobility/components-rn's runtime swizzle, which is unpublished); drop it once the swizzle ships. Upstreamed as microsoft/react-native-macos#3155.",
+      "consumers": ["music_app_rn", "music_player_app_rn"]
+    },
+    {
+      "file": "patch-package/react-native-audio-api+0.13.3.patch",
+      "mechanism": "patch-package",
+      "package": "react-native-audio-api",
+      "version": "0.13.3",
+      "why": "Adds macOS support to the podspec + source (compile-level; still :ios-only upstream at 0.13.6). Music family only.",
+      "consumers": ["music_app_rn", "music_player_app_rn"]
+    },
+    {
+      "file": "patch-package/react-native-svg+15.16.0.patch",
+      "mechanism": "patch-package",
+      "package": "react-native-svg",
+      "version": "15.16.0",
+      "why": "macOS CGImage extraction (NSImage has no .CGImage; both didReceiveImage sites) + Svg.tsx + Windows RNSVG Fabric renderer fixes (per-element redraw, leaked document per redraw). Compile-level. Re-based from 15.12.1 on 2026-10-27: the NSImage signature and the RNSVGSvgView wantsUpdateLayer override are now upstream in 15.16, so those hunks were dropped. Validated by a macOS xcodebuild.",
+      "consumers": ["music_app_rn", "music_player_app_rn"]
+    }
+  ],
+  "obsolete": {
+    "comment": "Patches that upstream has absorbed; they should be DELETED from the projects that still vendor them, not centralized.",
+    "@shopify+react-native-skia": "macOS Metal context fixes are upstream at skia >= 2.13. Dropped when music moved to skia 2.13.0 (2026-10-27); sudojo dropped it earlier at the same version.",
+    "react-native-svg (RNSVGSvgView wantsUpdateLayer, NSImage signature)": "Upstream in react-native-svg 15.16.0; those hunks removed from the re-based svg patch. The CGImage extraction and Windows hunks are still needed.",
+    "react-native-safe-area-context+5.6.2": "react-native-safe-area-context@5.6.2 ships src/NativeSafeAreaProvider.windows.tsx upstream (a re-export of CompatNativeSafeAreaProvider); that upstream file is what lands in node_modules, so the patch's custom View-backed provider never took effect. REMOVED from music_app_rn and music_app_rn-webgpu-spike on 2026-10-27; music_player_app_rn never had it. If music's Windows modals turn out to need the custom zero-inset provider, it must be re-done as a MODIFY of the upstream file, not a new-file create."
+  },
+  "notCentralized": {
+    "comment": "Deliberately left per-project, not synced.",
+    "music_app_rn-webgpu-spike": "Experimental spike still on RN 0.81.x; keeps its own 0.81.9 rn-macos, 0.81.x svg/skia/audio-api, safe-area and react-native-webgpu+0.13.0 patches locally until it is ported to 0.83 (webgpu 0.13 -> 0.19 is a large jump)."
+  }
+}

@@ -1,0 +1,167 @@
+diff --git a/node_modules/react-native-svg/apple/Elements/RNSVGImage.mm b/node_modules/react-native-svg/apple/Elements/RNSVGImage.mm
+--- a/node_modules/react-native-svg/apple/Elements/RNSVGImage.mm
++++ b/node_modules/react-native-svg/apple/Elements/RNSVGImage.mm
+@@ -166,7 +166,11 @@
+              }});
+   }
+   dispatch_async(dispatch_get_main_queue(), ^{
++#if TARGET_OS_OSX
++    self->_image = CGImageRetain([image CGImageForProposedRect:nil context:nil hints:nil]);
++#else
+     self->_image = CGImageRetain(image.CGImage);
++#endif
+     self->_imageSize = CGSizeMake(CGImageGetWidth(self->_image), CGImageGetHeight(self->_image));
+     [self invalidate];
+   });
+@@ -254,7 +258,11 @@
+                      callback:^(__unused NSError *error, NSImage *image) {
+ #endif // macOS]
+                        dispatch_async(dispatch_get_main_queue(), ^{
++#if TARGET_OS_OSX
++                         self->_image = CGImageRetain([image CGImageForProposedRect:nil context:nil hints:nil]);
++#else
+                          self->_image = CGImageRetain(image.CGImage);
++#endif
+                          self->_imageSize = CGSizeMake(CGImageGetWidth(self->_image), CGImageGetHeight(self->_image));
+                          if (self->_onLoad) {
+                            RCTImageSource *sourceLoaded;
+diff --git a/node_modules/react-native-svg/src/elements/Svg.tsx b/node_modules/react-native-svg/src/elements/Svg.tsx
+index 23f0840..acdd16e 100644
+--- a/node_modules/react-native-svg/src/elements/Svg.tsx
++++ b/node_modules/react-native-svg/src/elements/Svg.tsx
+@@ -26,6 +26,42 @@ import RNSVGSvgIOS from '../fabric/IOSSvgViewNativeComponent';
+ import type { Spec } from '../fabric/NativeSvgViewModule';
+ import extractOpacity from '../lib/extract/extractOpacity';
+ import { extractTransformSvgView } from '../lib/extract/extractTransform';
++
++// Presentation attributes an element passes to its descendants.
++const INHERITED_KEYS = [
++  "fill", "fillOpacity", "fillRule", "stroke", "strokeWidth", "strokeOpacity",
++  "strokeDasharray", "strokeDashoffset", "strokeLinecap", "strokeLinejoin",
++  "strokeMiterlimit",
++] as const;
++
++/**
++ * Windows: inherited presentation attributes, written onto every descendant.
++ * The Windows renderer does not pass a group's fill and stroke on to the
++ * shapes inside it, so an outline icon — fill="none" and a stroke on the
++ * <Svg>, bare <Path>s inside — drew as solid black shapes.
++ */
++function pushInherited(
++  children: React.ReactNode,
++  inherited: Record<string, unknown>,
++): React.ReactNode {
++  return React.Children.map(children, (child) => {
++    if (!React.isValidElement(child)) return child;
++    const own = child.props as Record<string, unknown>;
++    const added: Record<string, unknown> = {};
++    const passed: Record<string, unknown> = { ...inherited };
++    for (const key of INHERITED_KEYS) {
++      if (own[key] !== undefined) passed[key] = own[key];
++      else if (inherited[key] !== undefined) added[key] = inherited[key];
++    }
++    return own.children === undefined
++      ? React.cloneElement(child, added)
++      : React.cloneElement(
++          child,
++          added,
++          pushInherited(own.children as React.ReactNode, passed),
++        );
++  });
++}
+ import { ViewProps } from '../fabric/utils';
+ 
+ const styles = StyleSheet.create({
+@@ -195,7 +231,14 @@ export default class Svg extends Shape<SvgProps> {
+         {...extractViewBox({ viewBox, preserveAspectRatio })}>
+         <G
+           {...{
+-            children,
++            children:
++              Platform.OS === 'windows'
++                ? pushInherited(children, {
++                    fill, fillOpacity, fillRule, stroke, strokeWidth,
++                    strokeOpacity, strokeDasharray, strokeDashoffset,
++                    strokeLinecap, strokeLinejoin, strokeMiterlimit,
++                  })
++                : children,
+             style: gStyle,
+             font,
+             fill,
+diff --git a/node_modules/react-native-svg/windows/RNSVG/Fabric/RenderableView.cpp b/node_modules/react-native-svg/windows/RNSVG/Fabric/RenderableView.cpp
+index fb6a70c..0b82f4c 100644
+--- a/node_modules/react-native-svg/windows/RNSVG/Fabric/RenderableView.cpp
++++ b/node_modules/react-native-svg/windows/RNSVG/Fabric/RenderableView.cpp
+@@ -156,6 +156,9 @@ void RenderableView::FinalizeUpates(
+ }
+ 
+ ID2D1SvgElement &RenderableView::Render(const SvgView &svgView, ID2D1SvgDocument& document, ID2D1SvgElement &svgElement) noexcept {
++  // put() does not release what it overwrites: every redraw leaked each
++  // element's previous D2D node, and with it the whole previous document.
++  m_spD2DSvgElement = nullptr;
+   svgElement.CreateChild(GetSvgElementName(), m_spD2DSvgElement.put());
+   OnRender(svgView, document, *m_spD2DSvgElement);
+   return *m_spD2DSvgElement;
+diff --git a/node_modules/react-native-svg/windows/RNSVG/Fabric/SvgView.cpp b/node_modules/react-native-svg/windows/RNSVG/Fabric/SvgView.cpp
+index 1f1f408..506f5af 100644
+--- a/node_modules/react-native-svg/windows/RNSVG/Fabric/SvgView.cpp
++++ b/node_modules/react-native-svg/windows/RNSVG/Fabric/SvgView.cpp
+@@ -298,7 +298,38 @@ winrt::Microsoft::ReactNative::Composition::Theme SvgView::Theme() const noexcep
+   return nullptr;
+ }
+ 
++// Fabric calls Invalidate once for every descendant that is mounted, updated
++// or unmounted, and each call rebuilt the whole D2D document and redrew it on
++// the UI thread. A commit that touches N elements of an N-element drawing was
++// therefore N full redraws -- seconds of UI-thread time for a page of notation,
++// during which no JS timer fires either (RNW posts them through the UI thread).
++// One redraw per batch of invalidations, after the mount transaction is done.
+ void SvgView::Invalidate() {
++  if (m_drawPending) {
++    return;
++  }
++  auto view = m_wkView.get();
++  if (!view) {
++    return;
++  }
++  winrt::Microsoft::ReactNative::IReactDispatcher dispatcher{nullptr};
++  if (auto context = view.ReactContext()) {
++    dispatcher = context.UIDispatcher();
++  }
++  if (!dispatcher) {
++    DrawNow();
++    return;
++  }
++  m_drawPending = true;
++  dispatcher.Post([wkThis = get_weak()]() {
++    if (auto strongThis = wkThis.get()) {
++      strongThis->m_drawPending = false;
++      strongThis->DrawNow();
++    }
++  });
++}
++
++void SvgView::DrawNow() {
+   if (auto view = m_wkView.get()) {
+     auto size = winrt::Windows::Foundation::Size{ m_layoutMetrics.Frame.Width, m_layoutMetrics.Frame.Height };
+ 
+diff --git a/node_modules/react-native-svg/windows/RNSVG/Fabric/SvgView.h b/node_modules/react-native-svg/windows/RNSVG/Fabric/SvgView.h
+index f9ba7c6..433ed5f 100644
+--- a/node_modules/react-native-svg/windows/RNSVG/Fabric/SvgView.h
++++ b/node_modules/react-native-svg/windows/RNSVG/Fabric/SvgView.h
+@@ -88,12 +88,15 @@ struct SvgView : winrt::implements<SvgView, winrt::Windows::Foundation::IInspect
+   winrt::Microsoft::ReactNative::Composition::Theme Theme() const noexcept;
+ 
+  private:
++  void DrawNow();
++
+   void Draw(
+       const winrt::Microsoft::ReactNative::Composition::ViewComponentView &view,
+       ID2D1DeviceContext &context,
+       winrt::Windows::Foundation::Size const &size) noexcept;
+ 
+   bool m_isMounted{false};
++  bool m_drawPending{false};
+   winrt::Microsoft::ReactNative::Composition::Experimental::ISpriteVisual m_visual{nullptr};
+   winrt::Microsoft::ReactNative::LayoutMetrics m_layoutMetrics{{0, 0, 0, 0}, 1.0};
+   winrt::Microsoft::ReactNative::Composition::Experimental::ICompositionContext m_compContext{nullptr};
