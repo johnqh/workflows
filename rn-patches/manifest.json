@@ -22,11 +22,18 @@
       "file": "react-native-macos@0.83.0.patch",
       "package": "react-native-macos",
       "version": "0.83.0",
-      "why": "C++ ReactCommon renderer fixes (ShadowNode/ShadowNodeFamily/UIManager nativeProps_DEPRECATED mutex) + Modal sheet + View recycle hover-reset (compile-level; cannot be swizzled). Re-ported from 0.81.9 on 2026-10-27; nil-class codegen hunk removed 2026-10-28 (now handled by @sudobility/components-rn@1.0.133's runtime swizzle). Validated by a macOS xcodebuild. Renderer fixes upstreamed as microsoft/react-native-macos#3155.",
+      "why": "C++ ReactCommon renderer fixes (ShadowNode/ShadowNodeFamily/UIManager nativeProps_DEPRECATED mutex) + Modal sheet + View recycle hover-reset (compile-level; cannot be swizzled). Re-ported from 0.81.9 on 2026-10-27; nil-class codegen hunk removed 2026-10-28 (now handled by @sudobility/components-rn@1.0.133's runtime swizzle). Validated by a macOS xcodebuild. Applied to ALL macOS apps (generic Fabric fixes). Renderer fixes upstreamed as microsoft/react-native-macos#3155.",
       "consumers": [
         "music_app_rn",
         "music_player_app_rn",
-        "music_app_rn-webgpu-spike"
+        "music_app_rn-webgpu-spike",
+        "genuivo_app_rn",
+        "mogulgame_app_rn",
+        "raidr_agent_app_rn",
+        "sudojo_app_rn",
+        "svgr_app_rn",
+        "testomniac_app_rn",
+        "wcprediction_app_rn"
       ]
     },
     {
