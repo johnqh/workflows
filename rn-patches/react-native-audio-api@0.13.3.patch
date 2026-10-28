@@ -1,7 +1,7 @@
-diff --git a/node_modules/react-native-audio-api/RNAudioAPI.podspec b/node_modules/react-native-audio-api/RNAudioAPI.podspec
+diff --git a/RNAudioAPI.podspec b/RNAudioAPI.podspec
 index 85e28e4..487ebeb 100644
---- a/node_modules/react-native-audio-api/RNAudioAPI.podspec
-+++ b/node_modules/react-native-audio-api/RNAudioAPI.podspec
+--- a/RNAudioAPI.podspec
++++ b/RNAudioAPI.podspec
 @@ -11,6 +11,9 @@ $RN_AUDIO_API_STATIC_EXTERNAL_LIBS_DISABLED = ENV['DISABLE_AUDIOAPI_STATIC_EXTER
  fabric_flags = $new_arch_enabled ? '-DRCT_NEW_ARCH_ENABLED' : ''
  version_flag = "-DAUDIOAPI_VERSION=#{package_json['version']}"
@@ -48,10 +48,10 @@ index 85e28e4..487ebeb 100644
  
    s.prepare_command = <<-CMD
      chmod +x scripts/download-prebuilt-binaries.sh
-diff --git a/node_modules/react-native-audio-api/ios/audioapi/ios/core/NativeAudioRecorder.m b/node_modules/react-native-audio-api/ios/audioapi/ios/core/NativeAudioRecorder.m
+diff --git a/ios/audioapi/ios/core/NativeAudioRecorder.m b/ios/audioapi/ios/core/NativeAudioRecorder.m
 index d572472..e895770 100644
---- a/node_modules/react-native-audio-api/ios/audioapi/ios/core/NativeAudioRecorder.m
-+++ b/node_modules/react-native-audio-api/ios/audioapi/ios/core/NativeAudioRecorder.m
+--- a/ios/audioapi/ios/core/NativeAudioRecorder.m
++++ b/ios/audioapi/ios/core/NativeAudioRecorder.m
 @@ -1,3 +1,4 @@
 +#import <TargetConditionals.h>
  #import <audioapi/ios/core/NativeAudioRecorder.h>
@@ -80,10 +80,10 @@ index d572472..e895770 100644
  }
  
  - (int)getResolvedBufferSize
-diff --git a/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioEngine.mm b/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioEngine.mm
+diff --git a/ios/audioapi/ios/system/AudioEngine.mm b/ios/audioapi/ios/system/AudioEngine.mm
 index d91ed60..c25fe93 100644
---- a/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioEngine.mm
-+++ b/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioEngine.mm
+--- a/ios/audioapi/ios/system/AudioEngine.mm
++++ b/ios/audioapi/ios/system/AudioEngine.mm
 @@ -1,3 +1,4 @@
 +#import <TargetConditionals.h>
  #import <audioapi/ios/system/AudioEngine.h>
@@ -117,10 +117,10 @@ index d91ed60..c25fe93 100644
  
    AVAudioFormat *format = [self.audioEngine.outputNode inputFormatForBus:0];
    NSLog(@"📐 Engine output format: %.0f Hz, %u channels", format.sampleRate, format.channelCount);
-diff --git a/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioSessionManager.h b/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioSessionManager.h
+diff --git a/ios/audioapi/ios/system/AudioSessionManager.h b/ios/audioapi/ios/system/AudioSessionManager.h
 index e3ff5bc..2be5bd0 100644
---- a/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioSessionManager.h
-+++ b/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioSessionManager.h
+--- a/ios/audioapi/ios/system/AudioSessionManager.h
++++ b/ios/audioapi/ios/system/AudioSessionManager.h
 @@ -1,8 +1,12 @@
  #pragma once
  
@@ -190,10 +190,10 @@ index e3ff5bc..2be5bd0 100644
 +@end
 +
 +#endif
-diff --git a/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioSessionManager.mm b/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioSessionManager.mm
+diff --git a/ios/audioapi/ios/system/AudioSessionManager.mm b/ios/audioapi/ios/system/AudioSessionManager.mm
 index d115837..b1a2ef8 100644
---- a/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioSessionManager.mm
-+++ b/node_modules/react-native-audio-api/ios/audioapi/ios/system/AudioSessionManager.mm
+--- a/ios/audioapi/ios/system/AudioSessionManager.mm
++++ b/ios/audioapi/ios/system/AudioSessionManager.mm
 @@ -1,6 +1,10 @@
 +#import <TargetConditionals.h>
 +#import <audioapi/ios/system/AudioSessionManager.h>
@@ -337,10 +337,10 @@ index d115837..b1a2ef8 100644
 +@end
 +
 +#endif
-diff --git a/node_modules/react-native-audio-api/ios/audioapi/ios/system/SystemNotificationManager.h b/node_modules/react-native-audio-api/ios/audioapi/ios/system/SystemNotificationManager.h
+diff --git a/ios/audioapi/ios/system/SystemNotificationManager.h b/ios/audioapi/ios/system/SystemNotificationManager.h
 index 5ddf0d4..2a9c0ed 100644
---- a/node_modules/react-native-audio-api/ios/audioapi/ios/system/SystemNotificationManager.h
-+++ b/node_modules/react-native-audio-api/ios/audioapi/ios/system/SystemNotificationManager.h
+--- a/ios/audioapi/ios/system/SystemNotificationManager.h
++++ b/ios/audioapi/ios/system/SystemNotificationManager.h
 @@ -1,10 +1,14 @@
  #pragma once
  
@@ -384,10 +384,10 @@ index 5ddf0d4..2a9c0ed 100644
 +@end
 +
 +#endif
-diff --git a/node_modules/react-native-audio-api/ios/audioapi/ios/system/SystemNotificationManager.mm b/node_modules/react-native-audio-api/ios/audioapi/ios/system/SystemNotificationManager.mm
+diff --git a/ios/audioapi/ios/system/SystemNotificationManager.mm b/ios/audioapi/ios/system/SystemNotificationManager.mm
 index 6761a43..ab71649 100644
---- a/node_modules/react-native-audio-api/ios/audioapi/ios/system/SystemNotificationManager.mm
-+++ b/node_modules/react-native-audio-api/ios/audioapi/ios/system/SystemNotificationManager.mm
+--- a/ios/audioapi/ios/system/SystemNotificationManager.mm
++++ b/ios/audioapi/ios/system/SystemNotificationManager.mm
 @@ -1,8 +1,12 @@
 +#import <TargetConditionals.h>
 +#import <audioapi/ios/system/SystemNotificationManager.h>
@@ -441,10 +441,10 @@ index 6761a43..ab71649 100644
 +@end
 +
 +#endif
-diff --git a/node_modules/react-native-audio-api/ios/audioapi/ios/system/notification/PlaybackNotification.h b/node_modules/react-native-audio-api/ios/audioapi/ios/system/notification/PlaybackNotification.h
+diff --git a/ios/audioapi/ios/system/notification/PlaybackNotification.h b/ios/audioapi/ios/system/notification/PlaybackNotification.h
 index efa0492..940ef5d 100644
---- a/node_modules/react-native-audio-api/ios/audioapi/ios/system/notification/PlaybackNotification.h
-+++ b/node_modules/react-native-audio-api/ios/audioapi/ios/system/notification/PlaybackNotification.h
+--- a/ios/audioapi/ios/system/notification/PlaybackNotification.h
++++ b/ios/audioapi/ios/system/notification/PlaybackNotification.h
 @@ -1,11 +1,15 @@
  #pragma once
  
@@ -485,10 +485,10 @@ index efa0492..940ef5d 100644
 +@end
 +
 +#endif
-diff --git a/node_modules/react-native-audio-api/ios/audioapi/ios/system/notification/PlaybackNotification.mm b/node_modules/react-native-audio-api/ios/audioapi/ios/system/notification/PlaybackNotification.mm
+diff --git a/ios/audioapi/ios/system/notification/PlaybackNotification.mm b/ios/audioapi/ios/system/notification/PlaybackNotification.mm
 index ce533ba..8443dd5 100644
---- a/node_modules/react-native-audio-api/ios/audioapi/ios/system/notification/PlaybackNotification.mm
-+++ b/node_modules/react-native-audio-api/ios/audioapi/ios/system/notification/PlaybackNotification.mm
+--- a/ios/audioapi/ios/system/notification/PlaybackNotification.mm
++++ b/ios/audioapi/ios/system/notification/PlaybackNotification.mm
 @@ -1,6 +1,9 @@
 +#import <TargetConditionals.h>
  #import <audioapi/ios/AudioAPIModule.h>

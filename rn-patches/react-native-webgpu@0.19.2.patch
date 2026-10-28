@@ -1,5 +1,5 @@
---- a/node_modules/react-native-webgpu/apple/WebGPUView.h
-+++ b/node_modules/react-native-webgpu/apple/WebGPUView.h
+--- a/apple/WebGPUView.h
++++ b/apple/WebGPUView.h
 @@ -2,7 +2,7 @@
  
  #import "MetalView.h"
@@ -9,8 +9,8 @@
  
  NS_ASSUME_NONNULL_BEGIN
  
---- a/node_modules/react-native-webgpu/apple/RNWGUIKit.h
-+++ b/node_modules/react-native-webgpu/apple/RNWGUIKit.h
+--- a/apple/RNWGUIKit.h
++++ b/apple/RNWGUIKit.h
 @@ -4,8 +4,9 @@
  #if !TARGET_OS_OSX
  #import <UIKit/UIKit.h>
@@ -22,8 +22,8 @@
  
  #if !TARGET_OS_OSX
  typedef UIView RNWGPlatformView;
---- a/node_modules/react-native-webgpu/apple/MetalView.mm
-+++ b/node_modules/react-native-webgpu/apple/MetalView.mm
+--- a/apple/MetalView.mm
++++ b/apple/MetalView.mm
 @@ -18,6 +18,13 @@
    }
    return self;

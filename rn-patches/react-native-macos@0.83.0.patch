@@ -1,6 +1,6 @@
-diff --git a/node_modules/react-native-macos/React/Fabric/Mounting/ComponentViews/Modal/RCTModalHostViewComponentView.mm b/node_modules/react-native-macos/React/Fabric/Mounting/ComponentViews/Modal/RCTModalHostViewComponentView.mm
---- a/node_modules/react-native-macos/React/Fabric/Mounting/ComponentViews/Modal/RCTModalHostViewComponentView.mm
-+++ b/node_modules/react-native-macos/React/Fabric/Mounting/ComponentViews/Modal/RCTModalHostViewComponentView.mm
+diff --git a/React/Fabric/Mounting/ComponentViews/Modal/RCTModalHostViewComponentView.mm b/React/Fabric/Mounting/ComponentViews/Modal/RCTModalHostViewComponentView.mm
+--- a/React/Fabric/Mounting/ComponentViews/Modal/RCTModalHostViewComponentView.mm
++++ b/React/Fabric/Mounting/ComponentViews/Modal/RCTModalHostViewComponentView.mm
 @@ -19,6 +19,11 @@
  
  #import "RCTFabricModalHostViewController.h"
@@ -347,9 +347,9 @@ diff --git a/node_modules/react-native-macos/React/Fabric/Mounting/ComponentView
  @end
  
  #ifdef __cplusplus
-diff --git a/node_modules/react-native-macos/React/Fabric/Mounting/ComponentViews/View/RCTViewComponentView.mm b/node_modules/react-native-macos/React/Fabric/Mounting/ComponentViews/View/RCTViewComponentView.mm
---- a/node_modules/react-native-macos/React/Fabric/Mounting/ComponentViews/View/RCTViewComponentView.mm
-+++ b/node_modules/react-native-macos/React/Fabric/Mounting/ComponentViews/View/RCTViewComponentView.mm
+diff --git a/React/Fabric/Mounting/ComponentViews/View/RCTViewComponentView.mm b/React/Fabric/Mounting/ComponentViews/View/RCTViewComponentView.mm
+--- a/React/Fabric/Mounting/ComponentViews/View/RCTViewComponentView.mm
++++ b/React/Fabric/Mounting/ComponentViews/View/RCTViewComponentView.mm
 @@ -801,6 +801,25 @@
    _isJSResponder = NO;
    _removeClippedSubviews = NO;
@@ -376,9 +376,9 @@ diff --git a/node_modules/react-native-macos/React/Fabric/Mounting/ComponentView
  }
  
  - (void)setPropKeysManagedByAnimated_DO_NOT_USE_THIS_IS_BROKEN:(NSSet<NSString *> *_Nullable)props
-diff --git a/node_modules/react-native-macos/ReactCommon/react/renderer/core/ShadowNode.cpp b/node_modules/react-native-macos/ReactCommon/react/renderer/core/ShadowNode.cpp
---- a/node_modules/react-native-macos/ReactCommon/react/renderer/core/ShadowNode.cpp
-+++ b/node_modules/react-native-macos/ReactCommon/react/renderer/core/ShadowNode.cpp
+diff --git a/ReactCommon/react/renderer/core/ShadowNode.cpp b/ReactCommon/react/renderer/core/ShadowNode.cpp
+--- a/ReactCommon/react/renderer/core/ShadowNode.cpp
++++ b/ReactCommon/react/renderer/core/ShadowNode.cpp
 @@ -16,6 +16,8 @@
  #include <react/renderer/debug/DebugStringConvertible.h>
  #include <react/renderer/debug/debugStringConvertibleUtils.h>
@@ -413,9 +413,9 @@ diff --git a/node_modules/react-native-macos/ReactCommon/react/renderer/core/Sha
        auto clonedNode = componentDescriptor.cloneShadowNode(
            *this,
            {.props = props,
-diff --git a/node_modules/react-native-macos/ReactCommon/react/renderer/core/ShadowNodeFamily.h b/node_modules/react-native-macos/ReactCommon/react/renderer/core/ShadowNodeFamily.h
---- a/node_modules/react-native-macos/ReactCommon/react/renderer/core/ShadowNodeFamily.h
-+++ b/node_modules/react-native-macos/ReactCommon/react/renderer/core/ShadowNodeFamily.h
+diff --git a/ReactCommon/react/renderer/core/ShadowNodeFamily.h b/ReactCommon/react/renderer/core/ShadowNodeFamily.h
+--- a/ReactCommon/react/renderer/core/ShadowNodeFamily.h
++++ b/ReactCommon/react/renderer/core/ShadowNodeFamily.h
 @@ -8,6 +8,7 @@
  #pragma once
  
@@ -442,9 +442,9 @@ diff --git a/node_modules/react-native-macos/ReactCommon/react/renderer/core/Sha
    /**
     * @return tag for the ShadowNodeFamily.
     */
-diff --git a/node_modules/react-native-macos/ReactCommon/react/renderer/uimanager/UIManager.cpp b/node_modules/react-native-macos/ReactCommon/react/renderer/uimanager/UIManager.cpp
---- a/node_modules/react-native-macos/ReactCommon/react/renderer/uimanager/UIManager.cpp
-+++ b/node_modules/react-native-macos/ReactCommon/react/renderer/uimanager/UIManager.cpp
+diff --git a/ReactCommon/react/renderer/uimanager/UIManager.cpp b/ReactCommon/react/renderer/uimanager/UIManager.cpp
+--- a/ReactCommon/react/renderer/uimanager/UIManager.cpp
++++ b/ReactCommon/react/renderer/uimanager/UIManager.cpp
 @@ -7,6 +7,9 @@
  
  #include "UIManager.h"

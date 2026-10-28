@@ -1,34 +1,7 @@
-diff --git a/node_modules/react-native-svg/apple/Elements/RNSVGImage.mm b/node_modules/react-native-svg/apple/Elements/RNSVGImage.mm
---- a/node_modules/react-native-svg/apple/Elements/RNSVGImage.mm
-+++ b/node_modules/react-native-svg/apple/Elements/RNSVGImage.mm
-@@ -166,7 +166,11 @@
-              }});
-   }
-   dispatch_async(dispatch_get_main_queue(), ^{
-+#if TARGET_OS_OSX
-+    self->_image = CGImageRetain([image CGImageForProposedRect:nil context:nil hints:nil]);
-+#else
-     self->_image = CGImageRetain(image.CGImage);
-+#endif
-     self->_imageSize = CGSizeMake(CGImageGetWidth(self->_image), CGImageGetHeight(self->_image));
-     [self invalidate];
-   });
-@@ -254,7 +258,11 @@
-                      callback:^(__unused NSError *error, NSImage *image) {
- #endif // macOS]
-                        dispatch_async(dispatch_get_main_queue(), ^{
-+#if TARGET_OS_OSX
-+                         self->_image = CGImageRetain([image CGImageForProposedRect:nil context:nil hints:nil]);
-+#else
-                          self->_image = CGImageRetain(image.CGImage);
-+#endif
-                          self->_imageSize = CGSizeMake(CGImageGetWidth(self->_image), CGImageGetHeight(self->_image));
-                          if (self->_onLoad) {
-                            RCTImageSource *sourceLoaded;
-diff --git a/node_modules/react-native-svg/src/elements/Svg.tsx b/node_modules/react-native-svg/src/elements/Svg.tsx
+diff --git a/src/elements/Svg.tsx b/src/elements/Svg.tsx
 index 23f0840..acdd16e 100644
---- a/node_modules/react-native-svg/src/elements/Svg.tsx
-+++ b/node_modules/react-native-svg/src/elements/Svg.tsx
+--- a/src/elements/Svg.tsx
++++ b/src/elements/Svg.tsx
 @@ -26,6 +26,42 @@ import RNSVGSvgIOS from '../fabric/IOSSvgViewNativeComponent';
  import type { Spec } from '../fabric/NativeSvgViewModule';
  import extractOpacity from '../lib/extract/extractOpacity';
@@ -88,10 +61,10 @@ index 23f0840..acdd16e 100644
              style: gStyle,
              font,
              fill,
-diff --git a/node_modules/react-native-svg/windows/RNSVG/Fabric/RenderableView.cpp b/node_modules/react-native-svg/windows/RNSVG/Fabric/RenderableView.cpp
+diff --git a/windows/RNSVG/Fabric/RenderableView.cpp b/windows/RNSVG/Fabric/RenderableView.cpp
 index fb6a70c..0b82f4c 100644
---- a/node_modules/react-native-svg/windows/RNSVG/Fabric/RenderableView.cpp
-+++ b/node_modules/react-native-svg/windows/RNSVG/Fabric/RenderableView.cpp
+--- a/windows/RNSVG/Fabric/RenderableView.cpp
++++ b/windows/RNSVG/Fabric/RenderableView.cpp
 @@ -156,6 +156,9 @@ void RenderableView::FinalizeUpates(
  }
  
@@ -102,10 +75,10 @@ index fb6a70c..0b82f4c 100644
    svgElement.CreateChild(GetSvgElementName(), m_spD2DSvgElement.put());
    OnRender(svgView, document, *m_spD2DSvgElement);
    return *m_spD2DSvgElement;
-diff --git a/node_modules/react-native-svg/windows/RNSVG/Fabric/SvgView.cpp b/node_modules/react-native-svg/windows/RNSVG/Fabric/SvgView.cpp
+diff --git a/windows/RNSVG/Fabric/SvgView.cpp b/windows/RNSVG/Fabric/SvgView.cpp
 index 1f1f408..506f5af 100644
---- a/node_modules/react-native-svg/windows/RNSVG/Fabric/SvgView.cpp
-+++ b/node_modules/react-native-svg/windows/RNSVG/Fabric/SvgView.cpp
+--- a/windows/RNSVG/Fabric/SvgView.cpp
++++ b/windows/RNSVG/Fabric/SvgView.cpp
 @@ -298,7 +298,38 @@ winrt::Microsoft::ReactNative::Composition::Theme SvgView::Theme() const noexcep
    return nullptr;
  }
@@ -145,10 +118,10 @@ index 1f1f408..506f5af 100644
    if (auto view = m_wkView.get()) {
      auto size = winrt::Windows::Foundation::Size{ m_layoutMetrics.Frame.Width, m_layoutMetrics.Frame.Height };
  
-diff --git a/node_modules/react-native-svg/windows/RNSVG/Fabric/SvgView.h b/node_modules/react-native-svg/windows/RNSVG/Fabric/SvgView.h
+diff --git a/windows/RNSVG/Fabric/SvgView.h b/windows/RNSVG/Fabric/SvgView.h
 index f9ba7c6..433ed5f 100644
---- a/node_modules/react-native-svg/windows/RNSVG/Fabric/SvgView.h
-+++ b/node_modules/react-native-svg/windows/RNSVG/Fabric/SvgView.h
+--- a/windows/RNSVG/Fabric/SvgView.h
++++ b/windows/RNSVG/Fabric/SvgView.h
 @@ -88,12 +88,15 @@ struct SvgView : winrt::implements<SvgView, winrt::Windows::Foundation::IInspect
    winrt::Microsoft::ReactNative::Composition::Theme Theme() const noexcept;
  
