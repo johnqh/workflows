@@ -1,51 +1,65 @@
 diff --git a/src/elements/Svg.tsx b/src/elements/Svg.tsx
-index 23f0840..acdd16e 100644
+index 7ec207c..83fdda5 100644
 --- a/src/elements/Svg.tsx
 +++ b/src/elements/Svg.tsx
-@@ -26,6 +26,42 @@ import RNSVGSvgIOS from '../fabric/IOSSvgViewNativeComponent';
- import type { Spec } from '../fabric/NativeSvgViewModule';
- import extractOpacity from '../lib/extract/extractOpacity';
+@@ -28,6 +28,56 @@ import extractOpacity from '../lib/extract/extractOpacity';
  import { extractTransformSvgView } from '../lib/extract/extractTransform';
-+
-+// Presentation attributes an element passes to its descendants.
+ import { ViewProps } from '../fabric/utils';
+ 
++// Presentation attributes an element passes to its descendants (SVG inheritance).
 +const INHERITED_KEYS = [
-+  "fill", "fillOpacity", "fillRule", "stroke", "strokeWidth", "strokeOpacity",
-+  "strokeDasharray", "strokeDashoffset", "strokeLinecap", "strokeLinejoin",
-+  "strokeMiterlimit",
++  'fill',
++  'fillOpacity',
++  'fillRule',
++  'stroke',
++  'strokeWidth',
++  'strokeOpacity',
++  'strokeDasharray',
++  'strokeDashoffset',
++  'strokeLinecap',
++  'strokeLinejoin',
++  'strokeMiterlimit',
 +] as const;
 +
 +/**
-+ * Windows: inherited presentation attributes, written onto every descendant.
-+ * The Windows renderer does not pass a group's fill and stroke on to the
-+ * shapes inside it, so an outline icon — fill="none" and a stroke on the
-+ * <Svg>, bare <Path>s inside — drew as solid black shapes.
++ * Windows only: push inherited presentation attributes onto every descendant.
++ * The Windows RNSVG renderer does not pass a group's fill/stroke down to the
++ * shapes inside it, so an outline icon (fill="none" + a stroke on <Svg>, bare
++ * <Path>s inside) rendered as solid shapes. An element's own value wins over an
++ * inherited one; a group keeps propagating the resolved set to its children.
 + */
 +function pushInherited(
 +  children: React.ReactNode,
-+  inherited: Record<string, unknown>,
++  inherited: Record<string, unknown>
 +): React.ReactNode {
-+  return React.Children.map(children, (child) => {
-+    if (!React.isValidElement(child)) return child;
++  return React.Children.map(children, child => {
++    if (!React.isValidElement(child)) {
++      return child;
++    }
 +    const own = child.props as Record<string, unknown>;
 +    const added: Record<string, unknown> = {};
 +    const passed: Record<string, unknown> = { ...inherited };
 +    for (const key of INHERITED_KEYS) {
-+      if (own[key] !== undefined) passed[key] = own[key];
-+      else if (inherited[key] !== undefined) added[key] = inherited[key];
++      if (own[key] !== undefined) {
++        passed[key] = own[key];
++      } else if (inherited[key] !== undefined) {
++        added[key] = inherited[key];
++      }
 +    }
 +    return own.children === undefined
 +      ? React.cloneElement(child, added)
 +      : React.cloneElement(
 +          child,
 +          added,
-+          pushInherited(own.children as React.ReactNode, passed),
++          pushInherited(own.children as React.ReactNode, passed)
 +        );
 +  });
 +}
- import { ViewProps } from '../fabric/utils';
- 
++
  const styles = StyleSheet.create({
-@@ -195,7 +231,14 @@ export default class Svg extends Shape<SvgProps> {
+   svg: {
+     backgroundColor: 'transparent',
+@@ -196,7 +246,22 @@ export default class Svg extends Shape<SvgProps> {
          {...extractViewBox({ viewBox, preserveAspectRatio })}>
          <G
            {...{
@@ -53,9 +67,17 @@ index 23f0840..acdd16e 100644
 +            children:
 +              Platform.OS === 'windows'
 +                ? pushInherited(children, {
-+                    fill, fillOpacity, fillRule, stroke, strokeWidth,
-+                    strokeOpacity, strokeDasharray, strokeDashoffset,
-+                    strokeLinecap, strokeLinejoin, strokeMiterlimit,
++                    fill,
++                    fillOpacity,
++                    fillRule,
++                    stroke,
++                    strokeWidth,
++                    strokeOpacity,
++                    strokeDasharray,
++                    strokeDashoffset,
++                    strokeLinecap,
++                    strokeLinejoin,
++                    strokeMiterlimit,
 +                  })
 +                : children,
              style: gStyle,
