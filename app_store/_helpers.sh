@@ -32,9 +32,21 @@ MACOS_SCHEME=$(jq -r '.build.macos.scheme // empty' "$INFO_JSON")
 
 IOS_PROJECT=$(jq -r '.build.ios.project // empty' "$INFO_JSON")
 
+# Android project layout. RN apps keep the Gradle project under android/ with an
+# app/ module; a standalone Android app may have the Gradle root at the project
+# root (dir ".") and/or a different module name.
+ANDROID_DIR=$(jq -r '.build.android.dir // "android"' "$INFO_JSON")
+ANDROID_MODULE=$(jq -r '.build.android.module // "app"' "$INFO_JSON")
+
 # Detect project type: React Native (has package.json) vs native Xcode project.
 # RN is the default to preserve existing behavior for apps like sudojo.
-if [ -f "$PROJECT_DIR/package.json" ]; then
+# A project can force it with info.json .build.projectType — a standalone Android
+# or Windows app (no RN, no Xcode) sets "native" so the version comes from
+# info.json and the RN env-merge/pbxproj steps are skipped.
+FORCED_PROJECT_TYPE=$(jq -r '.build.projectType // empty' "$INFO_JSON")
+if [ -n "$FORCED_PROJECT_TYPE" ]; then
+  PROJECT_TYPE="$FORCED_PROJECT_TYPE"
+elif [ -f "$PROJECT_DIR/package.json" ]; then
   PROJECT_TYPE="rn"
 elif [ -n "$IOS_PROJECT" ] || ls "$PROJECT_DIR"/*.xcodeproj >/dev/null 2>&1; then
   PROJECT_TYPE="native"

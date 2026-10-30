@@ -1,0 +1,124 @@
+#!/bin/bash
+# appstore — unified entrypoint for the shared app_store toolkit.
+#
+# Replaces the per-app `app_store/scripts/*.sh` wrappers with a single command.
+# It locates the app's `app_store/` config directory, exports APP_STORE_DIR and
+# WORKFLOWS_DIR, then dispatches to the matching toolkit script.
+#
+# Install once (any app can then use it from its project root):
+#   ln -s ~/projects/workflows/app_store/appstore /usr/local/bin/appstore
+#
+# Usage:
+#   appstore <command> [options]
+#   appstore --dir path/to/app_store <command> [options]
+#
+# Commands:
+#   screenshots   Build (debug) + for each device prepare → capture → compose.
+#   capture       Capture screenshots on one already-running device.
+#   prepare       Boot one device, install the app, start Metro, launch.
+#   compose       Frame + caption raw captures into store screenshots.
+#   build         Build debug/release artifacts (ios, android, macos, windows).
+#   localize      Translate app_store/screenshots/info/<lang>/ store text.
+#   submit        Upload build + metadata to the stores (apple, google, microsoft).
+#   cleanup       Stop Metro and clean up.
+#   doctor        Validate config, credentials, and store rules.
+#   status        Generate / open the submission status dashboard.
+#   init          Scaffold an app_store/ config in the current project.
+#   help          Show this help.
+#
+# Dir resolution (first match wins):
+#   1. --dir <path>              (explicit)
+#   2. $APP_STORE_DIR            (environment)
+#   3. ./app_store/info.json     (run from the project root)
+#   4. ./info.json               (run from inside the app_store dir)
+#   5. walk up parent directories looking for app_store/info.json
+
+set -eo pipefail
+
+# Resolve this script's real location, following symlinks (it is commonly
+# installed as a symlink on PATH, e.g. /opt/homebrew/bin/appstore), so the
+# toolkit scripts are found next to the real file, not next to the symlink.
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+WORKFLOWS_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+
+# ── Resolve the app_store config directory ────────────────────────────────────
+
+EXPLICIT_DIR=""
+# Peek for --dir before the subcommand (it may also appear after; handled below).
+ARGS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dir) EXPLICIT_DIR="$2"; shift 2 ;;
+    *)     ARGS+=("$1"); shift ;;
+  esac
+done
+set -- "${ARGS[@]}"
+
+resolve_app_store_dir() {
+  if [ -n "$EXPLICIT_DIR" ]; then
+    (cd "$EXPLICIT_DIR" 2>/dev/null && pwd) && return 0
+    echo "Error: --dir '$EXPLICIT_DIR' not found." >&2; return 1
+  fi
+  if [ -n "$APP_STORE_DIR" ] && [ -f "$APP_STORE_DIR/info.json" ]; then
+    echo "$APP_STORE_DIR"; return 0
+  fi
+  if [ -f "$PWD/app_store/info.json" ]; then
+    echo "$PWD/app_store"; return 0
+  fi
+  if [ -f "$PWD/info.json" ] && [ "$(basename "$PWD")" = "app_store" ]; then
+    echo "$PWD"; return 0
+  fi
+  local dir="$PWD"
+  while [ "$dir" != "/" ]; do
+    if [ -f "$dir/app_store/info.json" ]; then echo "$dir/app_store"; return 0; fi
+    dir="$(dirname "$dir")"
+  done
+  return 1
+}
+
+CMD="${1:-help}"
+[ $# -gt 0 ] && shift || true
+
+# `init` and `help` do not need an existing app_store dir.
+case "$CMD" in
+  help|-h|--help)
+    sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    exit 0
+    ;;
+  init)
+    exec "$WORKFLOWS_DIR/init.sh" "$@"
+    ;;
+esac
+
+if ! APP_STORE_DIR="$(resolve_app_store_dir)"; then
+  echo "Error: could not locate an app_store/ config directory." >&2
+  echo "Run from a project with app_store/info.json, pass --dir, or set APP_STORE_DIR." >&2
+  exit 1
+fi
+export APP_STORE_DIR
+export WORKFLOWS_DIR
+
+# ── Dispatch ──────────────────────────────────────────────────────────────────
+
+case "$CMD" in
+  screenshots) exec "$WORKFLOWS_DIR/capture_raw.sh" "$@" ;;
+  capture)     exec "$WORKFLOWS_DIR/capture.sh" "$@" ;;
+  prepare)     exec "$WORKFLOWS_DIR/prepare.sh" "$@" ;;
+  compose)     exec "$WORKFLOWS_DIR/compose.sh" "$@" ;;
+  build)       exec "$WORKFLOWS_DIR/build.sh" "$@" ;;
+  localize)    exec "$WORKFLOWS_DIR/localize.sh" "$@" ;;
+  submit)      exec "$WORKFLOWS_DIR/submit.sh" "$@" ;;
+  cleanup)     exec "$WORKFLOWS_DIR/cleanup.sh" "$@" ;;
+  doctor)      exec "$WORKFLOWS_DIR/doctor.sh" "$@" ;;
+  status)      exec "$WORKFLOWS_DIR/status.sh" "$@" ;;
+  *)
+    echo "Unknown command: $CMD" >&2
+    echo "Run 'appstore help' for the list of commands." >&2
+    exit 1
+    ;;
+esac

@@ -1,0 +1,216 @@
+---
+# Reusable workflow for the CI-able parts of app-store submission.
+#
+# Screenshot capture is intentionally NOT here: it needs booted iOS simulators /
+# Android emulators (and macOS for Xcode), which don't fit hosted Linux runners.
+# Run `appstore screenshots` locally for that. This workflow covers:
+#   - metadata / localized-text submission (no binary)      [ubuntu]
+#   - Android release build + Google Play submission        [ubuntu]
+#   - Windows MSIX build + Microsoft Store submission       [windows]
+#
+# Each job runs only when its platform is selected AND its credentials are set,
+# mirroring the secret-driven style of unified-cicd.yml. The toolkit scripts are
+# pulled by checking out johnqh/workflows alongside the app repo.
+#
+# Caller example (.github/workflows/app-store.yml in the app repo):
+#   jobs:
+#     submit:
+#       uses: johnqh/workflows/.github/workflows/app-store.yml@main
+#       with:
+#         platforms: "google,microsoft"
+#         steps: "localize,submit"
+#         metadata-only: false
+#       secrets: inherit
+
+name: "App Store Submit - Reusable Workflow"
+
+on:
+  workflow_call:
+    inputs:
+      app-dir:
+        description: "Path to the app project (containing app_store/). Default: repo root."
+        type: string
+        default: "."
+      platforms:
+        description: "Comma-separated: apple,google,microsoft."
+        type: string
+        default: "google"
+      steps:
+        description: "Comma-separated: localize,submit."
+        type: string
+        default: "submit"
+      metadata-only:
+        description: "Submit metadata/screenshots only; skip binary upload."
+        type: boolean
+        default: false
+      screenshots:
+        description: "Upload composed store screenshots (must already exist in the repo)."
+        type: boolean
+        default: false
+      node-version:
+        type: string
+        default: "22.x"
+      workflows-ref:
+        description: "Ref of johnqh/workflows to use for the toolkit."
+        type: string
+        default: "main"
+    secrets:
+      NPM_TOKEN: { required: false }
+      WHISPERLY_API_KEY: { required: false }
+      APPLE_API_KEY_ID: { required: false }
+      APPLE_API_ISSUER_ID: { required: false }
+      APPLE_API_KEY_P8_BASE64: { required: false }   # base64 of the .p8
+      GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: { required: false }
+      ANDROID_KEYSTORE_BASE64: { required: false }
+      ANDROID_KEYSTORE_PASSWORD: { required: false }
+      ANDROID_KEY_ALIAS: { required: false }
+      ANDROID_KEY_PASSWORD: { required: false }
+      MS_TENANT_ID: { required: false }
+      MS_CLIENT_ID: { required: false }
+      MS_CLIENT_SECRET: { required: false }
+      MS_SELLER_APP_ID: { required: false }
+
+jobs:
+  # ── Decide which jobs should run ────────────────────────────────────────────
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      apple: ${{ steps.p.outputs.apple }}
+      google: ${{ steps.p.outputs.google }}
+      microsoft: ${{ steps.p.outputs.microsoft }}
+    steps:
+      - id: p
+        run: |
+          plats=",${{ inputs.platforms }},"
+          echo "apple=$([[ "$plats" == *",apple,"* ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "google=$([[ "$plats" == *",google,"* ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "microsoft=$([[ "$plats" == *",microsoft,"* ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+  # ── Metadata + localization (no binary; any store) ──────────────────────────
+  metadata:
+    needs: plan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: app
+      - uses: actions/checkout@v4
+        with:
+          repository: johnqh/workflows
+          ref: ${{ inputs.workflows-ref }}
+          path: workflows
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+      - name: Stage credentials
+        working-directory: app/${{ inputs.app-dir }}
+        run: |
+          mkdir -p app_store/.keys
+          cat > app_store/.env <<EOF
+          APPLE_API_KEY_ID=${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID=${{ secrets.APPLE_API_ISSUER_ID }}
+          GOOGLE_PLAY_SERVICE_ACCOUNT_KEY=.keys/google-play.json
+          MS_TENANT_ID=${{ secrets.MS_TENANT_ID }}
+          MS_CLIENT_ID=${{ secrets.MS_CLIENT_ID }}
+          MS_CLIENT_SECRET=${{ secrets.MS_CLIENT_SECRET }}
+          MS_SELLER_APP_ID=${{ secrets.MS_SELLER_APP_ID }}
+          WHISPERLY_API_KEY=${{ secrets.WHISPERLY_API_KEY }}
+          EOF
+          [ -n "${{ secrets.APPLE_API_KEY_P8_BASE64 }}" ] && echo "${{ secrets.APPLE_API_KEY_P8_BASE64 }}" | base64 -d > app_store/.keys/apple.p8 || true
+          [ -n "${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}" ] && echo '${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}' > app_store/.keys/google-play.json || true
+      - name: Doctor
+        working-directory: app/${{ inputs.app-dir }}
+        run: "$GITHUB_WORKSPACE/workflows/app_store/appstore --dir app_store doctor"
+      - name: Localize
+        if: contains(inputs.steps, 'localize')
+        working-directory: app/${{ inputs.app-dir }}
+        run: "$GITHUB_WORKSPACE/workflows/app_store/appstore --dir app_store localize --no-format"
+      - name: Submit metadata
+        if: contains(inputs.steps, 'submit')
+        working-directory: app/${{ inputs.app-dir }}
+        run: |
+          flags="--platforms ${{ inputs.platforms }} --metadata-only"
+          [ "${{ inputs.screenshots }}" = "true" ] && flags="$flags --screenshots"
+          "$GITHUB_WORKSPACE/workflows/app_store/appstore" --dir app_store submit $flags
+
+  # ── Android build + Google Play submit (binary) ─────────────────────────────
+  android:
+    needs: plan
+    if: needs.plan.outputs.google == 'true' && inputs.metadata-only == false && contains(inputs.steps, 'submit')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: app
+      - uses: actions/checkout@v4
+        with:
+          repository: johnqh/workflows
+          ref: ${{ inputs.workflows-ref }}
+          path: workflows
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: oven-sh/setup-bun@v2
+      - name: Install deps
+        working-directory: app/${{ inputs.app-dir }}
+        run: |
+          echo "@sudobility:registry=https://registry.npmjs.org/" > ~/.npmrc
+          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" >> ~/.npmrc
+          bun install --frozen-lockfile
+      - name: Stage signing + creds
+        working-directory: app/${{ inputs.app-dir }}
+        run: |
+          mkdir -p app_store/.keys
+          echo '${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}' > app_store/.keys/google-play.json
+          cat > app_store/.env <<EOF
+          GOOGLE_PLAY_SERVICE_ACCOUNT_KEY=.keys/google-play.json
+          EOF
+          if [ -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/release.keystore
+            cat >> android/gradle.properties <<EOF
+          RELEASE_STORE_FILE=release.keystore
+          RELEASE_STORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}
+          EOF
+          fi
+      - name: Build + submit (Google Play)
+        working-directory: app/${{ inputs.app-dir }}
+        run: |
+          "$GITHUB_WORKSPACE/workflows/app_store/appstore" --dir app_store build --platform android --release-only
+          flags="--platforms google"
+          [ "${{ inputs.screenshots }}" = "true" ] && flags="$flags --screenshots"
+          "$GITHUB_WORKSPACE/workflows/app_store/appstore" --dir app_store submit $flags
+
+  # ── Windows build + Microsoft Store submit (binary) ─────────────────────────
+  windows:
+    needs: plan
+    if: needs.plan.outputs.microsoft == 'true' && inputs.metadata-only == false && contains(inputs.steps, 'submit')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: app
+      - uses: actions/checkout@v4
+        with:
+          repository: johnqh/workflows
+          ref: ${{ inputs.workflows-ref }}
+          path: workflows
+      - uses: oven-sh/setup-bun@v2
+      - uses: microsoft/setup-msbuild@v2
+      - name: Build Windows package
+        working-directory: app/${{ inputs.app-dir }}
+        shell: pwsh
+        run: pwsh "$env:GITHUB_WORKSPACE/workflows/app_store/build_windows.ps1" -AppStoreDir "app_store"
+      - name: Submit (Microsoft Store)
+        working-directory: app/${{ inputs.app-dir }}
+        shell: pwsh
+        env:
+          MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
+          MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
+          MS_CLIENT_SECRET: ${{ secrets.MS_CLIENT_SECRET }}
+          MS_SELLER_APP_ID: ${{ secrets.MS_SELLER_APP_ID }}
+        run: |
+          $pkg = Get-ChildItem app_store/builds/release -Include *.msixupload,*.appxupload -Recurse | Select-Object -First 1
+          $flags = @("--action","submit","--app-store-dir","app_store","--package",$pkg.FullName)
+          if ("${{ inputs.screenshots }}" -eq "true") { $flags += "--screenshots" }
+          python "$env:GITHUB_WORKSPACE/workflows/app_store/submit_microsoft.py" @flags

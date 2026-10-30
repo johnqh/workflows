@@ -10,7 +10,7 @@
 #   build.sh [options]
 #
 # Options:
-#   --platform <name>   Filter platforms (ios, android). Repeatable.
+#   --platform <name>   Filter platforms (ios, android, macos, windows). Repeatable.
 #   --debug-only        Only build debug artifacts.
 #   --release-only      Only build release artifacts.
 #   --force             Rebuild even if artifacts already exist.
@@ -221,11 +221,11 @@ if want_platform android && [ "$DEBUG" = true ]; then
   else
     echo "Building Android debug APK..."
     if [ "$DRY_RUN" = true ]; then
-      echo "  [dry-run] Would run ./gradlew app:assembleDebug"
+      echo "  [dry-run] Would run ./gradlew ${ANDROID_MODULE}:assembleDebug (in $ANDROID_DIR)"
     else
-      (cd "$PROJECT_DIR/android" && ./gradlew app:assembleDebug -q)
+      (cd "$PROJECT_DIR/$ANDROID_DIR" && ./gradlew "${ANDROID_MODULE}:assembleDebug" -q)
 
-      BUILT_APK="$PROJECT_DIR/android/app/build/outputs/apk/debug/app-debug.apk"
+      BUILT_APK="$PROJECT_DIR/$ANDROID_DIR/$ANDROID_MODULE/build/outputs/apk/debug/app-debug.apk"
       if [ ! -f "$BUILT_APK" ]; then
         echo "Error: Android debug build succeeded but could not find APK"
         exit 1
@@ -248,11 +248,11 @@ if want_platform android && [ "$RELEASE" = true ]; then
   else
     echo "Building Android release AAB..."
     if [ "$DRY_RUN" = true ]; then
-      echo "  [dry-run] Would run ./gradlew app:bundleRelease"
+      echo "  [dry-run] Would run ./gradlew ${ANDROID_MODULE}:bundleRelease (in $ANDROID_DIR)"
     else
-      (cd "$PROJECT_DIR/android" && ./gradlew app:bundleRelease -q)
+      (cd "$PROJECT_DIR/$ANDROID_DIR" && ./gradlew "${ANDROID_MODULE}:bundleRelease" -q)
 
-      BUILT_AAB="$PROJECT_DIR/android/app/build/outputs/bundle/release/app-release.aab"
+      BUILT_AAB="$PROJECT_DIR/$ANDROID_DIR/$ANDROID_MODULE/build/outputs/bundle/release/app-release.aab"
       if [ ! -f "$BUILT_AAB" ]; then
         echo "Error: Android release build succeeded but could not find AAB"
         exit 1
@@ -359,6 +359,28 @@ if want_platform macos && [ -n "$MACOS_SCHEME" ] && [ "$RELEASE" = true ]; then
         echo "  You can export manually from Xcode: open $MACOS_ARCHIVE"
       fi
     fi
+  fi
+  echo ""
+fi
+
+# ── Windows build ─────────────────────────────────────────────────────────────
+# Windows (react-native-windows) must be built on a Windows host with MSBuild;
+# it cannot run under macOS/Linux. Delegate to build_windows.ps1 when we are on
+# Windows (pwsh available + Windows kernel), otherwise print guidance.
+
+if want_platform windows && [ "$RELEASE" = true ]; then
+  if command -v pwsh >/dev/null 2>&1 && [ "$(uname -s 2>/dev/null)" != "Darwin" ] && [ "$(uname -s 2>/dev/null)" != "Linux" ]; then
+    echo "Building Windows Store package..."
+    if [ "$DRY_RUN" = true ]; then
+      echo "  [dry-run] Would run build_windows.ps1"
+    else
+      pwsh "$SCRIPT_DIR/build_windows.ps1" -AppStoreDir "$APP_STORE_DIR"
+    fi
+  else
+    echo "Windows build skipped: not on a Windows host."
+    echo "  Run on a Windows PC from the project root:"
+    echo "    pwsh app_store/build_windows.ps1"
+    echo "  then submit from anywhere: appstore submit --platforms microsoft"
   fi
   echo ""
 fi

@@ -8,7 +8,7 @@
 #   submit.sh [options]
 #
 # Options:
-#   --platforms <list>   Comma-separated platforms: apple (default: apple).
+#   --platforms <list>   Comma-separated platforms: apple,google,microsoft (default: apple).
 #   --screenshots        Upload composed store screenshots.
 #   --subscriptions      Upload subscription name/description localizations.
 #   --metadata-only      Skip build/upload binary, only update metadata (and screenshots if --screenshots).
@@ -261,6 +261,60 @@ for platform in "${PLATFORMS[@]}"; do
 
       echo ""
       echo "Google Play submission complete."
+      ;;
+
+    microsoft)
+      echo ""
+      echo "══════════════════════════════════════════════════════════════"
+      echo "  MICROSOFT STORE"
+      echo "══════════════════════════════════════════════════════════════"
+      echo ""
+
+      # Validate Microsoft Partner Center credentials
+      if [ -z "$MS_TENANT_ID" ] || [ -z "$MS_CLIENT_ID" ] || [ -z "$MS_CLIENT_SECRET" ] || [ -z "$MS_SELLER_APP_ID" ]; then
+        echo "Error: MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET and MS_SELLER_APP_ID must be set in .env"
+        echo "Create an Azure AD app registration and associate it in Partner Center > Account settings > User management."
+        exit 1
+      fi
+
+      MS_FLAGS=()
+      [ "$UPLOAD_SCREENSHOTS" = true ] && MS_FLAGS+=(--screenshots)
+      [ "$METADATA_ONLY" = true ] && MS_FLAGS+=(--metadata-only)
+
+      # The MSIX/MSIXUPLOAD is produced by build_windows.ps1 on a Windows host
+      # and placed in builds/release/. If none is present we can still push
+      # metadata (--metadata-only is implied when no package exists).
+      MS_PACKAGE=""
+      if [ "$METADATA_ONLY" = false ]; then
+        MS_PACKAGE=$(find "$APP_STORE_DIR/builds/release" \( -name "*.msixupload" -o -name "*.msix" -o -name "*.appxupload" \) 2>/dev/null | head -1 || true)
+        if [ -z "$MS_PACKAGE" ]; then
+          echo "No MSIX package found in builds/release — submitting metadata only."
+          echo "  (Build one on a Windows PC: appstore build --platform windows)"
+          MS_FLAGS+=(--metadata-only)
+        else
+          echo "Package: $MS_PACKAGE"
+          MS_FLAGS+=(--package "$MS_PACKAGE")
+        fi
+      fi
+
+      if [ "$DRY_RUN" = true ]; then
+        echo "  [dry-run] Would submit to Microsoft Store"
+        [ -n "$MS_PACKAGE" ] && echo "  [dry-run] Would upload $MS_PACKAGE"
+        [ "$UPLOAD_SCREENSHOTS" = true ] && echo "  [dry-run] Would upload screenshots"
+      else
+        python3 "$SCRIPT_DIR/submit_microsoft.py" \
+          --action submit \
+          --tenant-id "$MS_TENANT_ID" \
+          --client-id "$MS_CLIENT_ID" \
+          --client-secret "$MS_CLIENT_SECRET" \
+          --app-id "$MS_SELLER_APP_ID" \
+          --package-version "$PACKAGE_VERSION" \
+          --app-store-dir "$APP_STORE_DIR" \
+          "${MS_FLAGS[@]}"
+      fi
+
+      echo ""
+      echo "Microsoft Store submission complete."
       ;;
 
     *)

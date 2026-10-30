@@ -66,6 +66,17 @@
       ]
     },
     {
+      "file": "@shopify%2Freact-native-skia@2.13.0.patch",
+      "package": "@shopify/react-native-skia",
+      "version": "2.13.0",
+      "why": "skia 2.13.0 packaging bug: VulkanGraphiteContext.h carries the _VulkanGraphiteUtils_DEFINED guard but the VulkanGraphiteUtils.h it includes is not shipped, so the iOS/macOS build fails with 'VulkanGraphiteUtils.h' not found -- the patch recreates that header (an empty guarded stub). Plus macOS Metal sizing fixes in apple/ (MetalWindowContext don't-override-contentsScale, RNSkMetalCanvasProvider compute w/h from layer.contentsScale, SkiaUIView viewDidChangeBackingProperties) so the Skia board renders at the right size on macOS. Consumers: the skia apps on 2.13.0.",
+      "consumers": [
+        "sudojo_app_rn",
+        "music_app_rn",
+        "music_player_app_rn"
+      ]
+    },
+    {
       "file": "react-native-webgpu@0.19.2.patch",
       "package": "react-native-webgpu",
       "version": "0.19.2",

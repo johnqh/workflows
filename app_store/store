@@ -1,0 +1,181 @@
+#!/bin/bash
+# store — high-level app_store orchestrator with a flag grammar, meant to be
+# wired into each app's package.json:
+#
+#   "scripts": { "store": "bash $HOME/projects/workflows/app_store/store" }
+#
+# Then, from the app:
+#   bun run store                              # whole flow: doctor → localize → screenshots → submit
+#   bun run store -- --screenshots             # capture all screenshots only
+#   bun run store -- --screenshots:iphone      # iPhone only
+#   bun run store -- --screenshots:iphone:en   # English iPhone only
+#   bun run store -- --submit:appstore         # submit to Apple App Store
+#   bun run store -- --localize --submit:play  # several steps, in the given order
+#   bun run store -- --dry-run --screenshots   # print actions without executing
+#
+# Grammar: one or more `--<step>[:<narrow>[:<narrow>]]` options (pass after `--`
+# so the package manager forwards them). `:` narrows a step:
+#   --screenshots[:<device|platform>[:<language>]]
+#   --build[:<platform>[:debug|release]]
+#   --submit[:<store>[:screenshots|metadata]]
+#   --localize | --compose | --doctor | --status | --cleanup
+# Store aliases: appstore/apple, play/google, microsoft/windows. Device aliases:
+# iphone→ios, ipad→ipados, mac/macos→macos, android→android (or a raw device key
+# from screens.json). A lone --dry-run (or -n) applies to every step.
+
+set -eo pipefail
+
+# ── Resolve toolkit dir (follow symlinks) ─────────────────────────────────────
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+WORKFLOWS_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+export WORKFLOWS_DIR
+
+# ── Resolve the app_store config dir (same rules as the appstore CLI) ─────────
+resolve_app_store_dir() {
+  if [ -n "$APP_STORE_DIR" ] && [ -f "$APP_STORE_DIR/info.json" ]; then echo "$APP_STORE_DIR"; return 0; fi
+  if [ -f "$PWD/app_store/info.json" ]; then echo "$PWD/app_store"; return 0; fi
+  if [ -f "$PWD/info.json" ] && [ "$(basename "$PWD")" = "app_store" ]; then echo "$PWD"; return 0; fi
+  local dir="$PWD"
+  while [ "$dir" != "/" ]; do
+    [ -f "$dir/app_store/info.json" ] && { echo "$dir/app_store"; return 0; }
+    dir="$(dirname "$dir")"
+  done
+  return 1
+}
+if ! APP_STORE_DIR="$(resolve_app_store_dir)"; then
+  echo "Error: no app_store/info.json found from $PWD (set APP_STORE_DIR)." >&2
+  exit 1
+fi
+export APP_STORE_DIR
+SCREENS_JSON="$APP_STORE_DIR/screens.json"
+INFO_JSON="$APP_STORE_DIR/info.json"
+
+command -v jq >/dev/null 2>&1 || { echo "Error: jq required (brew install jq)." >&2; exit 1; }
+
+# ── Alias resolvers ───────────────────────────────────────────────────────────
+device_platform_alias() { # for screenshots (keeps ipados distinct)
+  case "$1" in
+    iphone) echo ios ;; ipad|ipados) echo ipados ;;
+    mac|macos) echo macos ;; android) echo android ;; ios) echo ios ;;
+    *) echo "$1" ;;
+  esac
+}
+build_platform_alias() { # for build.sh (ipados builds via the ios project)
+  case "$1" in
+    iphone|ipad|ipados|ios) echo ios ;;
+    mac|macos) echo macos ;; android) echo android ;;
+    win|windows) echo windows ;; *) echo "$1" ;;
+  esac
+}
+store_alias() {
+  case "$1" in
+    appstore|apple|ios|mac|macos) echo apple ;;
+    play|google|android)          echo google ;;
+    ms|microsoft|windows|msstore) echo microsoft ;;
+    *) echo "" ;;
+  esac
+}
+configured_platforms() {
+  jq -r '[ (if .appleAppStore then "apple" else empty end),
+           (if .googlePlay then "google" else empty end),
+           (if .microsoftStore then "microsoft" else empty end) ] | join(",")' "$INFO_JSON"
+}
+
+DRY=()
+[ "${STORE_DRY:-}" = "1" ] && DRY=(--dry-run)
+
+# ── Step runners ──────────────────────────────────────────────────────────────
+run_doctor()  { "$WORKFLOWS_DIR/doctor.sh"; }
+run_localize(){ "$WORKFLOWS_DIR/localize.sh" "$@"; }
+run_compose() { "$WORKFLOWS_DIR/compose.sh" "${DRY[@]}"; }
+run_cleanup() { "$WORKFLOWS_DIR/cleanup.sh"; }
+run_status()  { "$WORKFLOWS_DIR/status.sh" --no-open "$APP_STORE_DIR"; }
+
+run_screenshots() { # $1 device/platform selector, $2 language
+  local sel="$1" lang="$2" args=()
+  if [ -n "$sel" ]; then
+    local p; p="$(device_platform_alias "$sel")"
+    if jq -e --arg p "$p" 'has($p)' "$SCREENS_JSON" >/dev/null 2>&1; then
+      args+=(--platforms "$p")
+    elif jq -e --arg d "$sel" 'any(.[]; type=="object" and has($d))' "$SCREENS_JSON" >/dev/null 2>&1; then
+      args+=(--device "$sel")
+    else
+      echo "Error: unknown screenshots target '$sel' (not a platform or device key)." >&2; exit 1
+    fi
+  fi
+  [ -n "$lang" ] && args+=(--languages "$lang")
+  "$WORKFLOWS_DIR/capture_raw.sh" "${args[@]}" "${DRY[@]}"
+}
+
+run_build() { # $1 platform, $2 debug|release
+  local plat="$1" mode="$2" args=()
+  [ -n "$plat" ] && args+=(--platform "$(build_platform_alias "$plat")")
+  case "$mode" in
+    debug)   args+=(--debug-only) ;;
+    release) args+=(--release-only) ;;
+    "")      ;;
+    *)       echo "Error: build mode must be debug or release (got '$mode')." >&2; exit 1 ;;
+  esac
+  "$WORKFLOWS_DIR/build.sh" "${args[@]}" "${DRY[@]}"
+}
+
+run_submit() { # $1 store selector, $2 screenshots|metadata
+  local sel="$1" mod="$2" plats args=()
+  if [ -n "$sel" ]; then
+    plats="$(store_alias "$sel")"
+    [ -z "$plats" ] && { echo "Error: unknown store '$sel' (apple|google|microsoft)." >&2; exit 1; }
+  else
+    plats="$(configured_platforms)"
+  fi
+  args=(--platforms "$plats")
+  case "$mod" in
+    screenshots) args+=(--screenshots) ;;
+    metadata)    args+=(--metadata-only) ;;
+    "")          ;;
+    *)           echo "Error: submit modifier must be screenshots or metadata (got '$mod')." >&2; exit 1 ;;
+  esac
+  "$WORKFLOWS_DIR/submit.sh" "${args[@]}" "${DRY[@]}"
+}
+
+# ── Parse args ────────────────────────────────────────────────────────────────
+declare -a STEPS=()
+for arg in "$@"; do
+  case "$arg" in
+    --) ;;                                   # package-manager separator
+    --dry-run|-n) STORE_DRY=1; DRY=(--dry-run) ;;
+    --*) STEPS+=("${arg#--}") ;;             # strip leading --
+    *) echo "Error: unexpected argument '$arg' (steps use --step[:narrow])." >&2; exit 1 ;;
+  esac
+done
+
+# ── Dispatch ──────────────────────────────────────────────────────────────────
+if [ ${#STEPS[@]} -eq 0 ]; then
+  # Whole flow. doctor gates the rest.
+  echo "▶ Whole flow: doctor → localize → screenshots → submit (${DRY[*]:-live})"
+  run_doctor
+  run_localize
+  run_screenshots "" ""
+  run_submit "" screenshots
+  exit 0
+fi
+
+for step in "${STEPS[@]}"; do
+  IFS=':' read -r name n1 n2 <<< "$step"
+  echo "▶ $step"
+  case "$name" in
+    screenshots) run_screenshots "$n1" "$n2" ;;
+    build)       run_build "$n1" "$n2" ;;
+    submit)      run_submit "$n1" "$n2" ;;
+    localize)    run_localize ;;
+    compose)     run_compose ;;
+    doctor)      run_doctor ;;
+    status)      run_status ;;
+    cleanup)     run_cleanup ;;
+    *)           echo "Error: unknown step '$name'." >&2; exit 1 ;;
+  esac
+done
