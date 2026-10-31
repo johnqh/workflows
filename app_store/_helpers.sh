@@ -134,6 +134,41 @@ is_simulator_booted() {
   [ "$state" = "Booted" ]
 }
 
+# Pick which display to screenshot on a (possibly multi-display) simulator.
+# Echoes a value for `--display` — a stable screen device name such as
+# "primary-1" — or nothing when a single default display exists (no flag
+# needed). Simulators like a dual-screen "Duo" expose several displays, and
+# `simctl ... screenshot` then refuses to pick one, so we choose here:
+# the display matching $2 ("WxH" from screens.json), else the largest.
+#   $1 = udid   $2 = desired resolution "WxH" (optional)
+resolve_display_flag() {
+  local udid="$1" want="$2" tmp probe rc
+  tmp=$(mktemp -t simdisp)
+  # A single-display sim screenshots fine with no flag — probe once.
+  probe=$(xcrun simctl io "$udid" screenshot --type=png "$tmp.png" 2>&1) && rc=0 || rc=$?
+  rm -f "$tmp" "$tmp.png"
+  [ "$rc" -eq 0 ] && return 0
+
+  # Multi-display: parse the "--display=<id>  <Name> (<devname>) <W>x<H>" list
+  # that simctl prints when it can't choose, matching on the screen device name.
+  local line dev w h area best_dev="" best_area=0
+  while IFS= read -r line; do
+    case "$line" in *--display=*) ;; *) continue ;; esac
+    dev=$(printf '%s\n' "$line" | sed -nE 's/.*\(([^)]+)\).*/\1/p')
+    w=$(printf '%s\n' "$line" | sed -nE 's/.*[^0-9]([0-9]+)x([0-9]+).*/\1/p')
+    h=$(printf '%s\n' "$line" | sed -nE 's/.*[^0-9]([0-9]+)x([0-9]+).*/\2/p')
+    [ -z "$dev" ] && continue
+    if [ -n "$want" ] && { [ "${w}x${h}" = "$want" ] || [ "${h}x${w}" = "$want" ]; }; then
+      printf '%s' "$dev"; return 0
+    fi
+    area=$(( ${w:-0} * ${h:-0} ))
+    if [ "$area" -gt "$best_area" ]; then best_area=$area; best_dev=$dev; fi
+  done <<EOF
+$probe
+EOF
+  printf '%s' "$best_dev"
+}
+
 shutdown_simulator() {
   local udid="$1"
   echo "Shutting down simulator $udid..."

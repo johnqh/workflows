@@ -66,6 +66,15 @@ if [ -z "$FULL_URL" ]; then
   FULL_URL="${API_BASE%/}/${SLUG}"
 fi
 
+# Resolve the translation API key. Prefer an already-exported WHISPERLY_API_KEY
+# (e.g. set by the caller), else read it from the developer key files — the same
+# convention the per-app localize scripts use, so this works both from the CLI
+# and when launched by tools that don't inherit a project .env.
+if [ -z "${WHISPERLY_API_KEY:-}" ]; then
+  WHISPERLY_API_KEY=$(grep -h '^WHISPERLY_API_KEY=' ~/.develop/.keys ~/.keys ~/.keys.txt 2>/dev/null | head -1 | cut -d= -f2- || true)
+  export WHISPERLY_API_KEY
+fi
+
 echo "Translating store text in $STORE_LOCALES"
 echo "  endpoint: $FULL_URL"
 node "$LOCALIZE_BATCH" "$STORE_LOCALES" "$FULL_URL" "${PASSTHROUGH[@]}"

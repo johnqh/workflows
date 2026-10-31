@@ -14,6 +14,7 @@
 #   --languages <list>  Comma-separated language codes to capture (default: all).
 #   --paths <list>      Comma-separated path values to capture (default: all). Must match paths.json entries.
 #   --delay <seconds>   Seconds to wait before capture (default: 8).
+#   --force             Re-capture screens whose .png already exists (default: skip).
 #
 # paths.json entries are strings, or {"path": "...", "delay": <seconds>} for a
 # shot that needs longer than --delay — a screen that is still loading or
@@ -33,6 +34,7 @@ LANGUAGES_FILTER=""
 PATHS_FILTER=""
 DELAY=8
 DRY_RUN=false
+FORCE=false
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -41,6 +43,7 @@ while [ $# -gt 0 ]; do
     --languages)    LANGUAGES_FILTER="$2"; shift 2 ;;
     --paths)        PATHS_FILTER="$2"; shift 2 ;;
     --delay)        DELAY="$2"; shift 2 ;;
+    --force)        FORCE=true; shift ;;
     --dry-run)      DRY_RUN=true; shift ;;
     -*)         echo "Unknown option: $1"; exit 1 ;;
     *)          echo "Unexpected argument: $1"; exit 1 ;;
@@ -83,6 +86,11 @@ elif [ "$DEVICE_TYPE" = "simulator" ]; then
     exit 1
   fi
   echo "Using simulator: $DEVICE_NAME ($UDID)"
+  # Multi-display sims (e.g. a dual-screen "Duo") need an explicit --display.
+  DESIRED_RES=$(jq -r --arg p "$DEVICE_PLATFORM" --arg d "$DEVICE_KEY" \
+    '.[$p][$d].store_resolution // .[$p][$d].resolution // empty' "$SCREENS_JSON" 2>/dev/null)
+  IOS_DISPLAY=$(resolve_display_flag "$UDID" "$DESIRED_RES")
+  [ -n "$IOS_DISPLAY" ] && echo "Using display: $IOS_DISPLAY (${DESIRED_RES:-largest})"
 elif [ "$DEVICE_TYPE" = "emulator" ]; then
   if ! SERIAL=$(find_running_avd_serial "$DEVICE_NAME"); then
     echo "Error: Emulator '$DEVICE_NAME' is not running. Run prepare.sh first."
@@ -163,7 +171,7 @@ capture_ios() {
   sleep 2
   xcrun simctl openurl "$udid" "$url"
   sleep "$delay"
-  xcrun simctl io "$udid" screenshot "$output"
+  xcrun simctl io "$udid" screenshot ${IOS_DISPLAY:+--display="$IOS_DISPLAY"} "$output"
 }
 
 capture_android() {
@@ -221,6 +229,10 @@ capture_screenshot() {
   local output="$out_dir/${seq}.png"
 
   count=$((count + 1))
+  if [ "$FORCE" != true ] && [ -f "$output" ]; then
+    echo "  [$count/$total] [$lang] ${seq}.png — exists, skipping (use --force)."
+    return
+  fi
   if [ "$DRY_RUN" = true ]; then
     echo "  [$count/$total] [$lang] $url → $output (wait ${delay}s)"
   else
