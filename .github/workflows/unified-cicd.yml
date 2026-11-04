@@ -157,16 +157,18 @@ jobs:
       - name: "Configure git for private Python dependencies"
         if: steps.detect-pm.outputs.manager == 'python'
         env:
-          GIT_DEP_TOKEN: ${{ secrets.GIT_DEP_TOKEN }}
+          # Prefer GH_PACKAGES_READ_TOKEN; fall back to the deprecated
+          # GIT_DEP_TOKEN so not-yet-migrated callers keep working.
+          DEP_TOKEN: ${{ secrets.GH_PACKAGES_READ_TOKEN || secrets.GIT_DEP_TOKEN }}
         run: |
-          if [ -n "$GIT_DEP_TOKEN" ]; then
+          if [ -n "$DEP_TOKEN" ]; then
             # --add is required: both insteadOf values map onto the same url.<base>
             # key, and a plain `git config` would clobber the first.
-            git config --global --add url."https://x-access-token:${GIT_DEP_TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
-            git config --global --add url."https://x-access-token:${GIT_DEP_TOKEN}@github.com/".insteadOf "git@github.com:"
+            git config --global --add url."https://x-access-token:${DEP_TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
+            git config --global --add url."https://x-access-token:${DEP_TOKEN}@github.com/".insteadOf "git@github.com:"
             echo "✅ git URL rewrite configured for private dependencies"
           else
-            echo "ℹ️  GIT_DEP_TOKEN not set, skipping git rewrite"
+            echo "ℹ️  No dependency token set, skipping git rewrite"
           fi
 
       - name: "Install Python dependencies"
