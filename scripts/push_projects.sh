@@ -1,6 +1,6 @@
 #!/bin/bash
 
-PUSH_PROJECTS_VERSION="1.7.0"
+PUSH_PROJECTS_VERSION="1.7.1"
 
 # push_projects.sh - Reusable script to update, validate, version bump, and push projects
 #
@@ -1846,13 +1846,24 @@ process_project() {
         fi
     fi
 
-    # Auto-format TypeScript projects after dependency updates to fix prettier drift
+    # Auto-format TypeScript projects after dependency updates to fix prettier
+    # drift. Skip when node_modules is absent -- the formatter binary lives
+    # there, so running it would just fail with "command not found" (exit 127).
+    # When @sudobility deps actually changed, update_sudobility_deps already ran
+    # `bun add`, which installed node_modules, so the meaningful case still
+    # formats. A project with no deps to install and no node_modules (e.g. right
+    # after a disk clean) has no drift to fix and is validated from source after
+    # an install below only if it has changes.
     if [ "$PKG_MANAGER" != "python" ] && [ -f "$project_path/package.json" ]; then
         local has_format_script
         has_format_script=$(bun -e "const s=require('$(js_path "$project_path/package.json")').scripts||{};console.log(s.format?'yes':'no')" 2>/dev/null) || has_format_script="no"
         if [ "$has_format_script" = "yes" ]; then
-            log_info "Running format..."
-            (cd "$project_path" && pm_run format) 2>&1 || true
+            if [ -d "$project_path/node_modules" ]; then
+                log_info "Running format..."
+                (cd "$project_path" && pm_run format) 2>&1 || true
+            else
+                log_info "Skipping format (node_modules absent)"
+            fi
         fi
     fi
 
@@ -1905,6 +1916,22 @@ process_project() {
     else
         log_info "Changes detected, proceeding with validation and version bump"
     fi
+
+    # Code changes were detected (or --force / an RN app with changes), so this
+    # project will be validated and built. Run a fresh install first: only the
+    # processing path reaches here -- skipped no-change projects return earlier
+    # and never install. This guarantees the tooling that validation needs
+    # (typecheck/lint/test/build all live in node_modules) is present even when
+    # node_modules was removed beforehand (e.g. by clean.sh), and that it
+    # matches a package.json just bumped by the @sudobility dep update. A
+    # node_modules created here is deleted after the build when it did not exist
+    # before the run (NODE_MODULES_EXISTED=false).
+    log_info "Code changes detected -- installing dependencies before validation..."
+    if ! run_with_timeout 300 pm_install; then
+        log_error "Failed to install dependencies before validation for $project_name"
+        return 1
+    fi
+    log_success "Dependencies installed"
 
     log_info "Running validation checks..."
     if ! validate_project "$project_path"; then
