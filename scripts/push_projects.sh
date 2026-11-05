@@ -1,6 +1,6 @@
 #!/bin/bash
 
-PUSH_PROJECTS_VERSION="1.6.1"
+PUSH_PROJECTS_VERSION="1.7.0"
 
 # push_projects.sh - Reusable script to update, validate, version bump, and push projects
 #
@@ -90,6 +90,11 @@ PKG_LOCKFILE=""
 # Whether the current project's version was bumped (set per-project).
 # React Native apps are never bumped; commit messages follow this flag.
 VERSION_BUMPED=true
+
+# Whether node_modules already existed when we started this project, captured
+# before the script installs anything. A node_modules this run created is
+# throwaway and deleted after the build; one the developer already had is kept.
+NODE_MODULES_EXISTED=true
 
 # Detect package manager based on lockfile
 detect_package_manager() {
@@ -1569,10 +1574,78 @@ generate_codex_commit_message() {
     return 0
 }
 
+# Reclaim disk space by deleting build output before committing.
+#
+# Validation runs `build`, which leaves a dist/ (and friends) on disk for every
+# project in the release. Across the whole family that is a lot of regenerable
+# bytes we never need after the checks pass. Delete them before staging.
+#
+# Only paths git does NOT track are removed: a project that intentionally
+# commits its dist/ keeps it, and no deletion is ever staged into the release
+# commit. (Same guard as clean_generated_artifacts_for_validation.)
+remove_build_artifacts() {
+    local project_dir="$1"
+    local candidates=(dist build out lib .next .nuxt .svelte-kit .turbo .vite coverage)
+    local removed=()
+
+    local target path
+    for target in "${candidates[@]}"; do
+        path="$project_dir/$target"
+        [ -e "$path" ] || continue
+
+        # Skip anything git tracks -- deleting it would stage a deletion into
+        # the release commit and rewrite committed build output.
+        if git -C "$project_dir" ls-files --error-unmatch "$target" >/dev/null 2>&1 || \
+           git -C "$project_dir" ls-files -- "$target/**" 2>/dev/null | grep -q .; then
+            log_info "Keeping tracked build path: $target"
+            continue
+        fi
+
+        rm -rf "$path"
+        removed+=("$target")
+    done
+
+    # tsc incremental build-info files are always disposable.
+    find "$project_dir" -maxdepth 2 -name '*.tsbuildinfo' -not -path '*/node_modules/*' -delete 2>/dev/null || true
+
+    if [ ${#removed[@]} -gt 0 ]; then
+        log_success "Removed build artifacts to save disk space: ${removed[*]}"
+    else
+        log_info "No untracked build artifacts to remove"
+    fi
+}
+
+# Delete node_modules the build created, but only if it did not exist before
+# this run (NODE_MODULES_EXISTED, captured at the top of process_project).
+# node_modules is the largest disposable directory; one the developer already
+# had is left in place so their working copy is not disturbed.
+remove_created_node_modules() {
+    local project_dir="$1"
+    local nm="$project_dir/node_modules"
+
+    [ -d "$nm" ] || return 0
+
+    if [ "$NODE_MODULES_EXISTED" = true ]; then
+        log_info "Keeping node_modules (present before this run)"
+        return 0
+    fi
+
+    log_info "Deleting node_modules created by this run to save disk space..."
+    rm -rf "$nm"
+    log_success "Removed node_modules (did not exist before the build)"
+}
+
 # Commit and push changes
 commit_and_push() {
     local project_dir="$1"
     local project_name="$2"
+
+    # Free disk by dropping regenerable build output before staging. Runs here
+    # so it covers every path that reaches a commit/push. Tracked dist/ is kept.
+    remove_build_artifacts "$project_dir"
+
+    # Drop node_modules too, but only when this run created it (see the helper).
+    remove_created_node_modules "$project_dir"
 
     local needs_commit=true
     if ! has_project_changes; then
@@ -1735,6 +1808,17 @@ process_project() {
     if ! git rev-parse --git-dir >/dev/null 2>&1; then
         log_warning "Not a git repository, skipping"
         return 0
+    fi
+
+    # Record whether node_modules exists *before* the script installs anything
+    # (symlink reinstall, dep updates, lockfile install all come later). This
+    # is the "did it exist before the build" check: if it was absent now, the
+    # build's node_modules is something this run created and is deleted after.
+    if [ -d "$project_path/node_modules" ]; then
+        NODE_MODULES_EXISTED=true
+    else
+        NODE_MODULES_EXISTED=false
+        log_info "node_modules absent at start -- will delete it after the build"
     fi
 
     # Detect package manager for this project
