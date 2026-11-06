@@ -1926,12 +1926,22 @@ process_project() {
     # matches a package.json just bumped by the @sudobility dep update. A
     # node_modules created here is deleted after the build when it did not exist
     # before the run (NODE_MODULES_EXISTED=false).
-    log_info "Code changes detected -- installing dependencies before validation..."
-    if ! run_with_timeout 300 pm_install; then
-        log_error "Failed to install dependencies before validation for $project_name"
-        return 1
+    # Node projects only: validation tooling (typecheck/lint/test/build) lives in
+    # node_modules, so a fresh install guarantees it is present and matches a
+    # package.json just bumped by the dep update. A Python project has no
+    # package.json and `pm_install` has no python branch -- it would fall through
+    # to `npm install`, which (finding no package.json in the project) walks up
+    # to the parent directory and aborts the whole run with ENOENT. Python
+    # validation runs from .venv/bin and needs no install here, so skip it, the
+    # same way the format step and the lockfile-update install below are skipped.
+    if [ "$PKG_MANAGER" != "python" ] && [ -f "$project_path/package.json" ]; then
+        log_info "Code changes detected -- installing dependencies before validation..."
+        if ! run_with_timeout 300 pm_install; then
+            log_error "Failed to install dependencies before validation for $project_name"
+            return 1
+        fi
+        log_success "Dependencies installed"
     fi
-    log_success "Dependencies installed"
 
     log_info "Running validation checks..."
     if ! validate_project "$project_path"; then
