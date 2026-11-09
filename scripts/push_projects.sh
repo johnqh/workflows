@@ -1,6 +1,6 @@
 #!/bin/bash
 
-PUSH_PROJECTS_VERSION="1.7.1"
+PUSH_PROJECTS_VERSION="1.8.0"
 
 # push_projects.sh - Reusable script to update, validate, version bump, and push projects
 #
@@ -1015,6 +1015,132 @@ validate_python_project() {
     return 0
 }
 
+# ---------------------------------------------------------------------------
+# Local sibling file links -> package manager (deployment invariant)
+#
+# A tsconfig `paths` entry whose target starts with "../" points outside the
+# project, at a co-developed sibling checkout, e.g.
+#     "@sudobility/writing_formats": ["../writing_formats/src/index.ts"]
+#     "yjs":                         ["../writing_core/node_modules/yjs"]
+# That is only a *temporary* local-development convenience: it makes tsc (and
+# any bundler that reads tsconfig paths) resolve the package from a sibling
+# source tree instead of the version installed from the registry. Deployment
+# must ALWAYS resolve those from the package manager -- the exact version
+# push_projects just installed -- so before change detection we strip every
+# "../" target permanently. There is no restore: package-manager resolution is
+# the committed, deployed state, and the strip flows into the normal version
+# bump + commit + push. A developer re-adds "../" links by hand while working;
+# the next push normalizes them away again.
+#
+# Only targets that escape the project are touched. In-project aliases
+# ("./src/*", "src/*", absolute in-project paths, "@/*" -> ["src/*"], ...) are
+# kept verbatim. If stripping the "../" targets empties an entry, the whole key
+# is dropped so the import falls through to normal node_modules resolution.
+#
+# Only files that actually contained a "../" target are rewritten. A rewrite
+# reserializes the file as JSON (any comments are dropped); the format step that
+# runs afterwards re-applies the project's style.
+normalize_sibling_links_to_package_manager() {
+    local project_dir="$1"
+
+    # Node/TS only: Python projects have no tsconfig.
+    [ "$PKG_MANAGER" = "python" ] && return 0
+
+    local runner=""
+    if command -v bun >/dev/null 2>&1; then
+        runner="bun"
+    elif command -v node >/dev/null 2>&1; then
+        runner="node"
+    else
+        return 0  # No JS runtime (shouldn't happen for a Node project); skip quietly.
+    fi
+
+    local script
+    script=$(mktemp "${TMPDIR:-/tmp}/tsconfig_norm.XXXXXX.mjs")
+    cat > "$script" <<'NODE'
+import fs from 'node:fs';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+
+const file = process.argv[2];
+const text = fs.readFileSync(file, 'utf8');
+const dir = path.dirname(path.resolve(file));
+
+// Minimal JSONC -> JSON (strip // and /* */ comments outside strings, and
+// trailing commas). Fallback only; TypeScript's own parser is preferred.
+function parseJsonc(src) {
+  let out = '', inStr = false, quote = '', i = 0;
+  while (i < src.length) {
+    const c = src[i], n = src[i + 1];
+    if (inStr) {
+      out += c;
+      if (c === '\\') { out += (n ?? ''); i += 2; continue; }
+      if (c === quote) inStr = false;
+      i++; continue;
+    }
+    if (c === '"' || c === "'") { inStr = true; quote = c; out += c; i++; continue; }
+    if (c === '/' && n === '/') { i += 2; while (i < src.length && src[i] !== '\n') i++; continue; }
+    if (c === '/' && n === '*') { i += 2; while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) i++; i += 2; continue; }
+    out += c; i++;
+  }
+  return JSON.parse(out.replace(/,(\s*[}\]])/g, '$1'));
+}
+
+function parseConfig() {
+  // Prefer the project's own TypeScript: it reads JSONC and does NOT resolve
+  // `extends`, so we only ever edit this file's own `paths`.
+  try {
+    const require = createRequire(file);
+    const ts = require(require.resolve('typescript', { paths: [dir] }));
+    const r = ts.readConfigFile(file, (p) => fs.readFileSync(p, 'utf8'));
+    if (!r.error && r.config) return r.config;
+  } catch {}
+  return parseJsonc(text);
+}
+
+let config;
+try { config = parseConfig(); }
+catch (e) { console.error(String((e && e.message) || e)); process.exit(3); }
+
+const paths = config && config.compilerOptions && config.compilerOptions.paths;
+if (!paths || typeof paths !== 'object') { process.stdout.write('UNCHANGED'); process.exit(0); }
+
+let changed = false;
+for (const key of Object.keys(paths)) {
+  const targets = paths[key];
+  if (!Array.isArray(targets)) continue;
+  const kept = targets.filter((t) => !String(t).startsWith('../'));
+  if (kept.length === targets.length) continue;
+  changed = true;
+  if (kept.length === 0) delete paths[key];
+  else paths[key] = kept;
+}
+
+if (!changed) { process.stdout.write('UNCHANGED'); process.exit(0); }
+
+fs.writeFileSync(file, JSON.stringify(config, null, 2) + '\n');
+process.stdout.write('CHANGED');
+NODE
+
+    local tsconfig result status
+    # Top-level tsconfig*.json only -- never recurse into node_modules.
+    for tsconfig in "$project_dir"/tsconfig*.json; do
+        [ -f "$tsconfig" ] || continue
+        status=0
+        result=$("$runner" "$script" "$tsconfig" 2>/dev/null) || status=$?
+        if [ "$status" -ne 0 ]; then
+            log_warning "Could not normalize sibling links in $(basename "$tsconfig") (parse failed); leaving it unchanged"
+            continue
+        fi
+        if [ "$result" = "CHANGED" ]; then
+            log_info "Resolved sibling file links to the package manager in $(basename "$tsconfig")"
+        fi
+    done
+
+    rm -f "$script"
+    return 0
+}
+
 validate_project() {
     local project_dir="$1"
 
@@ -1838,6 +1964,13 @@ process_project() {
         fi
         return 1
     fi
+
+    # Deployment invariant: resolve sibling file links ("../" tsconfig paths)
+    # from the package manager, not from sibling checkouts. Done here -- after
+    # the registry dep update, before change detection and formatting -- so the
+    # normalization is formatted, validated, committed, and pushed like any
+    # other change.
+    normalize_sibling_links_to_package_manager "$project_path"
 
     if [ "$SUBPACKAGES_MODE" = true ]; then
         if ! process_subpackages "$project_path"; then
