@@ -1,6 +1,29 @@
-# Unified CI/CD Workflows
+# johnqh/workflows — Shared CI/CD & Tooling
 
-This repository contains reusable GitHub Actions workflows for the Web3 Email ecosystem.
+The shared repository (`johnqh/workflows`, published as the private package
+`@0xmail/workflows`) that the whole Sudobility / 0xmail family consumes. It holds
+**reusable GitHub Actions workflows**, the **`appstore` store-submission toolkit**,
+**shared build/release/i18n/SEO scripts**, and **canonical React Native dependency
+patches**. Sibling repos reference the workflows with `uses:`, fetch a few scripts by
+raw URL, or check this repo out alongside their own.
+
+## What's in this repo
+
+| Path | What it is |
+|---|---|
+| `.github/workflows/unified-cicd.yml` | The main reusable CI/CD workflow (~1500 lines, 10 jobs). Auto-detects deploy targets from configured secrets. Handles Node/Bun **and** Python. |
+| `.github/workflows/python-cicd.yml` | Lean Python-only reusable workflow — test + optional tag/release, needs only `contents: write`. |
+| `.github/workflows/app-store.yml` | Reusable workflow for the CI-able parts of app-store submission (metadata, Android→Play, Windows→Microsoft Store). |
+| `app_store/` | The `appstore` / `store` CLI toolkit for screenshots, store-text localization, builds and submission to Apple / Google / Microsoft. See `app_store/README.md`. |
+| `scripts/` | Shared scripts: SEO generators, i18n localization, token rotation, trusted-publisher setup, per-package publish/safety gates, Cloudflare env, cleanup, RN-patch sync, multi-repo push. See [Shared scripts](#shared-scripts). |
+| `rn-patches/` | Canonical RN dependency patches (bun `patchedDependencies`) synced into consumer repos. See `rn-patches/manifest.json`. |
+| `examples/` | Copy-ready caller `ci-cd.yml` templates (public/restricted npm lib, python, docker, cloudflare webapp). |
+| `docs/DEPLOYMENT.md` | Per-provider secret setup guide. |
+
+> **How `@sudobility/*` dependencies resolve:** this repo's `.npmrc` maps
+> `@sudobility:registry=https://npm.pkg.github.com` (GitHub Packages). Consuming repos
+> install those packages from GitHub Packages using a `GH_PACKAGES_READ_TOKEN`
+> (read:packages PAT). See [NPM / GitHub Packages](#npm--github-packages--publish-target).
 
 ## Overview
 
@@ -16,6 +39,22 @@ The unified CI/CD workflow provides:
 **Key Feature**: The workflow automatically detects which deployment targets to use based on configured secrets. No need to specify a project type!
 
 ## Usage
+
+> **Required caller permissions.** GitHub validates the union of all jobs' permission
+> requests at compile time, before any `if:` is evaluated. **Every** caller of
+> `unified-cicd.yml` — even a Python-only or no-publish one — must declare all three or
+> the run fails at startup (`startup_failure`, no logs):
+>
+> ```yaml
+> permissions:
+>   contents: write      # releases / tags
+>   id-token: write      # npm OIDC provenance
+>   deployments: write   # Cloudflare / Vercel
+> ```
+>
+> For GitHub Packages publishing (`publish-target: github`) also add `packages: write`.
+> The lean `python-cicd.yml` needs only `contents: write` (see
+> [Other reusable workflows](#other-reusable-workflows)).
 
 ### For Library Projects (NPM Only)
 
@@ -128,16 +167,21 @@ jobs:
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
+| `node-version` | string | No | `22.x` | Node.js version to use |
+| `bun-version` | string | No | `1.4.4` | Bun version (used when `bun.lock` is detected). Pinned (not `latest`) for deterministic installs. |
 | `npm-access` | string | No | `restricted` | **Deprecated / ignored.** Package access now comes from each package's `publishConfig.access` in `package.json`; the publish step no longer passes `--access`. Safe to delete from `ci-cd.yml`. |
 | `skip-npm-publish` | boolean | No | `false` | Skip NPM publishing even if `NPM_TOKEN` is configured (useful for apps that need `NPM_TOKEN` only for private dependencies) |
-| `notification-email` | string | No | `""` | Email address to notify on test failures (only used for `develop` branch) |
-| `node-version` | string | No | `22.x` | Node.js version to use |
+| `publish-target` | string | No | `npm` | Where to publish the npm package: `npm` (npmjs.org via OIDC trusted publishing) or `github` (GitHub Packages via `GITHUB_TOKEN`). Set per repo to migrate it to GitHub Packages without affecting others. |
+| `cloudflare-project-name` | string | No | repo name | Cloudflare Pages project name (only used if Cloudflare secrets are set) |
+| `docker-image-name` | string | No | repo name | Docker image name (only used if Docker Hub secrets are set) |
+| `docker-platforms` | string | No | `linux/arm64,linux/amd64` | Platforms to build. Narrow to `linux/amd64` when a dependency ships no arm64 wheel. |
 | `python-version` | string | No | `3.11` | Python version to use for Python projects |
 | `python-package-manager` | string | No | `uv` | Python package manager: `uv` or `pip` |
 | `pypi-publish` | boolean | No | `false` | Publish Python packages to PyPI when a `pyproject.toml` project changes version |
 | `pypi-repository-url` | string | No | `""` | Optional PyPI repository URL, for example `https://test.pypi.org/legacy/` |
-| `cloudflare-project-name` | string | No | repo name | Cloudflare Pages project name (only used if Cloudflare secrets are set) |
-| `docker-image-name` | string | No | repo name | Docker image name (only used if Docker Hub secrets are set) |
+| `github-release` | boolean | No | `false` | Create a git tag + GitHub Release for **Python** projects independent of PyPI publishing |
+| `python-extras` | string | No | `dev` | Comma-separated extras to install for Python projects (pip only), e.g. `dev,ws`. Empty installs none. |
+| `python-strict` | boolean | No | `false` | Fail the build when ruff/pytest are missing after install, and let mypy failures fail the build |
 
 ### Secrets
 
@@ -145,15 +189,19 @@ The workflow automatically detects which deployment targets to use based on conf
 
 | Secret | Triggers | Description |
 |--------|----------|-------------|
-| `NPM_TOKEN` | 📦 NPM publishing | NPM authentication token. When set, publishes package to NPM on version changes. |
+| `NPM_TOKEN` | 📦 NPM install / publish | **Read-only** npm token. Installs private `@sudobility/*` deps and pre-checks the published version. On `publish-target: npm` the actual publish uses OIDC trusted publishing, **not** this token. |
+| `GH_PACKAGES_READ_TOKEN` | 📥 GitHub Packages install | GitHub PAT with `read:packages`, to install `@scope` deps from GitHub Packages across repos. Falls back to the built-in `GITHUB_TOKEN` when unset. |
+| `GIT_DEP_TOKEN` | 📥 private git deps | **Deprecated** alias / PAT with read-only Contents access for private-repo git dependencies. Prefer `GH_PACKAGES_READ_TOKEN`. |
 | `PYPI_TOKEN` | 🐍 PyPI publishing | PyPI API token. When set with `pypi-publish: true`, publishes Python packages on version changes. |
 | `DOCKERHUB_USERNAME` + `DOCKERHUB_TOKEN` | 🐳 Docker deployment | Docker Hub credentials. When both are set, builds and pushes Docker images. |
 | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | ☁️ Cloudflare Pages | Cloudflare credentials. When both are set, deploys to Cloudflare Pages. |
 | `RAILWAY_TOKEN` + `RAILWAY_SERVICE` | 🚂 Railway deployment | Railway credentials. When both are set, deploys to Railway. |
 | `VERCEL_TOKEN` + `VERCEL_ORG_ID` + `VERCEL_PROJECT_ID` | ▲ Vercel deployment | Vercel credentials. When all three are set, deploys to Vercel. |
-| `SMTP_HOST` + `SMTP_USERNAME` + `SMTP_PASSWORD` | 📧 Email notifications | SMTP server credentials. When set with `notification-email` input, sends email on test failures (develop branch only). |
-| `SMTP_PORT` | Email config | SMTP server port (optional, defaults to 587) |
-| `VITE_*`, `REACT_APP_*`, `NEXT_PUBLIC_*`, `BUILD_*` | 🏗️ Build env vars | Any secrets starting with these prefixes are automatically passed to build process |
+| `VITE_*`, `REACT_APP_*`, `NEXT_PUBLIC_*`, `BUILD_*` | 🏗️ Build env vars | Any secrets starting with these prefixes are automatically passed to the build process |
+
+> All secrets are `required: false`; pass only the ones your repo needs (or use
+> `secrets: inherit`). The `test` job only reaches secrets you pass, so an app that
+> needs `NPM_TOKEN` just for private deps still passes it and sets `skip-npm-publish: true`.
 
 ## How It Works
 
@@ -167,14 +215,16 @@ Always runs:
 
 **Build Environment Variables**: The workflow automatically passes all secrets with common build prefixes (`VITE_*`, `REACT_APP_*`, `NEXT_PUBLIC_*`, `BUILD_*`) to the build process. This means you can add any build-time environment variables to your repository secrets and they'll be automatically available during the build without modifying the workflow file.
 
-### When NPM_TOKEN is set
+### npm package (version changed on `main`)
 
-Automatically runs:
-- 📦 Publishes to NPM (if version changed) via **OIDC Trusted Publishing** — the
-  publish step uses **no token**; a trusted publisher must be configured per package
-  (see *Secret rotation & OIDC trusted publishing*). The `NPM_TOKEN` secret is
-  **read-only** and is used only to install private `@sudobility/*` dependencies.
-- 🏷️ Creates GitHub release with tag
+Automatically runs (unless `skip-npm-publish: true`):
+- 📦 **`publish-target: npm` (default)** — publishes to npmjs.org via **OIDC Trusted
+  Publishing** (no token; a trusted publisher must be configured per package). `NPM_TOKEN`
+  is **read-only**, used only to install private `@sudobility/*` deps. Job `release_npm`.
+- 📦 **`publish-target: github`** — publishes to **GitHub Packages** via `GITHUB_TOKEN`.
+  Job `release_github_packages`.
+- 🏷️ Either way, creates a GitHub release with tag. See
+  [NPM / GitHub Packages](#npm--github-packages--publish-target).
 
 ### When PYPI_TOKEN is set
 
@@ -202,7 +252,28 @@ You can deploy to multiple targets simultaneously! For example:
 - Cloudflare Pages + Docker Hub
 - All three targets at once
 
-## NPM Package Access
+## NPM / GitHub Packages & publish target
+
+### Where packages publish (`publish-target`)
+
+The `publish-target` input decides the npm publish destination, per repo:
+
+- **`npm` (default)** — publishes to **npmjs.org via OIDC Trusted Publishing**. The
+  publish step uses **no token**: it upgrades npm to ≥ 11.5.1, strips every token from
+  the environment, and relies solely on the GitHub OIDC id-token. A **trusted publisher
+  must be configured per package** on npmjs.com pointing at `johnqh/<repo>` + the caller
+  workflow file **`ci-cd.yml`** (not `unified-cicd.yml`). `NPM_TOKEN` is read-only and
+  cannot publish here. Job: `release_npm`.
+- **`github`** — publishes to **GitHub Packages** (`npm.pkg.github.com`) using the
+  built-in `GITHUB_TOKEN`. Scope is derived from the repo owner (lowercased, e.g.
+  `@sudobility`). Requires the caller to grant `packages: write`. Old versions are not
+  pruned. Job: `release_github_packages`.
+
+> **Consuming** `@sudobility/*` packages (install side) is independent of where you
+> publish: this repo's `.npmrc` maps `@sudobility` to GitHub Packages, and consumers
+> authenticate reads with `GH_PACKAGES_READ_TOKEN` (falls back to `GITHUB_TOKEN`).
+
+### Package access (public vs restricted)
 
 Package visibility is controlled by each package's **`publishConfig.access`** in its
 `package.json` — the single source of truth. The publish step runs `npm publish`
@@ -258,54 +329,18 @@ The workflow automatically:
 3. Only publishes if version has changed
 4. Creates GitHub release with tag `vX.Y.Z`
 
-## Develop Branch Support
+## Develop Branch & Pull Requests
 
-The workflow supports a `develop` branch for CI testing without deployments:
-
-### Behavior on `develop` Branch
+Add `develop` to your `on.push.branches` for CI-only testing:
 
 - ✅ Runs all tests (lint, type-check, unit tests, build)
-- ❌ Skips all deployments (NPM, Docker, Cloudflare, Railway, Vercel)
-- ❌ Skips GitHub release creation
-- 📧 Sends email notification on test failure (if configured)
+- ❌ Skips every deployment (npm, GitHub Packages, PyPI, Docker, Cloudflare, Railway, Vercel) and GitHub release creation
 
-### Email Notifications for Test Failures
+Pull requests also run tests only (no deployment). Deployments happen only on push to
+`main`.
 
-Configure email notifications for `develop` branch test failures:
-
-```yaml
-on:
-  push:
-    branches:
-      - main
-      - develop  # Add develop branch
-
-jobs:
-  cicd:
-    uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
-    with:
-      notification-email: ${{ vars.NOTIFICATION_EMAIL }}  # Set this variable in repo settings
-    secrets:
-      SMTP_HOST: ${{ secrets.SMTP_HOST }}
-      SMTP_PORT: ${{ secrets.SMTP_PORT }}  # Optional, defaults to 587
-      SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
-      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-```
-
-**Setup:**
-1. Set `NOTIFICATION_EMAIL` variable in repository settings (Settings > Secrets and variables > Actions > Variables)
-2. Configure SMTP secrets in repository settings (Settings > Secrets and variables > Actions > Secrets):
-   - `SMTP_HOST`: Your SMTP server (e.g., `smtp.gmail.com`)
-   - `SMTP_USERNAME`: Your SMTP username/email
-   - `SMTP_PASSWORD`: Your SMTP password or app-specific password
-   - `SMTP_PORT`: (Optional) SMTP port, defaults to 587
-
-**Email Content:**
-When tests fail on `develop` branch, the notification includes:
-- Repository name
-- Branch name
-- Commit SHA and author
-- Direct link to the failed workflow run
+> Note: the old SMTP email-on-failure feature (`notification-email` input, `SMTP_*`
+> secrets) has been **removed** from `unified-cicd.yml`. Do not pass those to `@main`.
 
 ## Docker Deployment
 
@@ -314,9 +349,9 @@ Docker deployment automatically runs when:
 - Project has a `Dockerfile`
 
 Features:
-- Multi-architecture builds (arm64, amd64)
+- Multi-architecture builds (arm64, amd64 by default; override with `docker-platforms`)
 - Tags: `latest` and version tag (e.g., `v8.0.0`)
-- Passes `NPM_TOKEN` as build arg for private dependencies
+- Passes `GH_PACKAGES_TOKEN` (from `GH_PACKAGES_READ_TOKEN`, falling back to `GITHUB_TOKEN`) as a build arg for installing private dependencies
 - Works alongside NPM publishing (no conflicts)
 
 ## Cloudflare Pages Deployment
@@ -585,6 +620,123 @@ uses: johnqh/workflows/.github/workflows/unified-cicd.yml@v1.0.0
    ```bash
    rm .github/workflows/ci-cd.yml.backup
    ```
+
+## Other reusable workflows
+
+Everything above is `unified-cicd.yml`. The repo ships two more reusable workflows:
+
+### `python-cicd.yml` — lean Python-only CI/CD
+
+Split out from `unified-cicd.yml` so pure-Python repos grant only `contents: write`
+(instead of the full `contents` + `id-token` + `deployments` union). Use it for Python
+repos that do **not** publish to npm/PyPI and do **not** deploy. It runs the Python test
+pipeline (ruff, mypy, pytest) and, by default, creates a git tag + GitHub Release on push
+to `main`. It publishes nothing.
+
+| Input | Default | Notes |
+|---|---|---|
+| `python-version` | `3.11` | |
+| `python-package-manager` | `pip` | `uv` or `pip` (note: `unified-cicd.yml` defaults to `uv`) |
+| `python-extras` | `dev` | comma-separated extras (pip only) |
+| `python-strict` | `false` | fail on missing tooling / mypy errors |
+| `github-release` | `true` | tag + GitHub Release on push to `main` (note: `unified-cicd.yml` defaults to `false`) |
+
+Secrets (both optional): `GH_PACKAGES_READ_TOKEN`, `GIT_DEP_TOKEN` (deprecated alias) —
+for cloning private git dependencies. Outputs: `released`, `version`, `tag`.
+
+```yaml
+permissions: { contents: write }
+jobs:
+  cicd:
+    uses: johnqh/workflows/.github/workflows/python-cicd.yml@main
+    secrets:
+      GH_PACKAGES_READ_TOKEN: ${{ secrets.GH_PACKAGES_READ_TOKEN }}
+```
+
+### `app-store.yml` — app-store submission
+
+Reusable workflow for the CI-able parts of store submission (screenshot **capture** stays
+local — it needs simulators/emulators). It checks out `johnqh/workflows` alongside the app
+repo and drives the `appstore` toolkit:
+
+- **metadata** (ubuntu) — `appstore doctor`, optional `localize`, metadata/screenshot submit
+- **android** (ubuntu) — build + submit to Google Play
+- **windows** (windows) — MSIX build + submit to Microsoft Store
+
+Inputs: `app-dir` (`.`), `platforms` (`google`; CSV of `apple,google,microsoft`), `steps`
+(`submit`; CSV of `localize,submit`), `metadata-only` (`false`), `screenshots` (`false`),
+`node-version` (`22.x`), `workflows-ref` (`main`). Secrets (all optional): `NPM_TOKEN`,
+`WHISPERLY_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`, `APPLE_API_KEY_P8_BASE64`,
+`GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`, `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`,
+`ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`, `MS_TENANT_ID`, `MS_CLIENT_ID`,
+`MS_CLIENT_SECRET`, `MS_SELLER_APP_ID`.
+
+```yaml
+jobs:
+  submit:
+    uses: johnqh/workflows/.github/workflows/app-store.yml@main
+    with: { platforms: "google,microsoft", steps: "localize,submit" }
+    secrets: inherit
+```
+
+## App Store toolkit (`app_store/`)
+
+The `appstore` / `store` CLI takes any app in the family through the whole store pipeline —
+screenshots, store-text localization, builds, and submission to the Apple App Store, Google
+Play, and Microsoft Store — from one config-driven data model. Each app keeps only its
+config + credentials under `<project>/app_store/`; all logic lives here. Apps invoke it via
+a repo-local `scripts/store.sh` wrapper (RN apps add a `"store"` package.json script). The
+`app-store.yml` workflow above runs its CI-able steps.
+
+See **[`app_store/README.md`](app_store/README.md)** for the flag grammar, data model
+(`info.json`, `screens.json`, `languages.json`, localized `screenshots/info/<lang>/…`),
+credentials, `appstore doctor` length limits, and the `appstore status` fleet dashboard.
+
+## Shared scripts
+
+Scripts under `scripts/` fall into three groups. Token/publisher scripts are documented
+under [Secret rotation & OIDC trusted publishing](#secret-rotation--oidc-trusted-publishing).
+
+**Fetched by consuming repos** (via `raw.githubusercontent.com/johnqh/workflows/main/...`):
+
+| Script | Purpose |
+|---|---|
+| `generate-seo-assets.mjs` | Per-route, per-language `index.html` + `sitemap.xml` + `robots.txt` for multilingual static sites. Config-driven via the project's `seo.config.mjs`. `node generate-seo-assets.mjs <public\|dist>`. |
+| `generate-seo-assets-v2.mjs` | Drop-in successor: sitemap **index** + per-language child sitemaps (submit English first), managed `<head>` injection, per-route `staticHtml`/`structuredData` (JSON-LD) hooks, richer robots. Same CLI/config. |
+
+**Per-package / per-project tools** (run from a package or app root):
+
+| Script | Purpose |
+|---|---|
+| `localize.cjs` | LLM-first i18n: LM Studio local LLM → DeepL fallback → keep English. 15 languages, placeholder/brand/term preservation, incremental. Needs `VITE_APP_DEEPL_API_KEY` for the fallback. |
+| `localize_batch.cjs` | Alternative i18n via the Whisperly batch API (`WHISPERLY_API_KEY`). |
+| `process-static-files.ts` | Generic `{{VAR}}` template processor (`index.template.html`, `public/**/*.template.*`) from `.env`/`.env.local`. |
+| `generate-cloudflare-env.ts` | Build a committed `.env.production` from `.env`, baking **public** `VITE_*` config and excluding credential-looking keys. |
+| `cf-pages-sync-env.sh` | Push all non-empty vars from a `.env` to a Cloudflare Pages project as secrets, via `wrangler`. (No credential filtering.) |
+| `publish-local.sh` | Publish one package locally, mirroring `release_npm` — mainly to **bootstrap** a brand-new package before a trusted publisher can be attached. |
+| `check-package-entry.cjs` | Post-build gate: import the package's declared entry point as a consumer would (run under **Node**, not Bun). |
+| `check-publish-safety.cjs` | Refuse to publish from a dirty tree or republish an existing version (`ALLOW_DIRTY_PUBLISH=1` overrides). |
+| `add-esm-extensions.cjs` | Rewrite relative TS import/export specifiers to carry explicit `.js`/`/index.js` so tsc-emitted ESM loads under Node. |
+
+**Monorepo-wide maintenance** (iterate sibling repos, usually under `~/projects`):
+
+| Script | Purpose |
+|---|---|
+| `push_projects.sh` | Update `@sudobility/*` deps, validate, bump, commit, push across many projects (CI then publishes). Registry-aware of the npmjs-vs-GitHub-Packages split; polls the registry until a publish lands. RN **apps** are never version-bumped; RN libraries are. AI commit messages via `claude -p --model haiku` (`--no-ai` to disable). |
+| `sync_rn_patches.sh` | Distribute canonical RN patches from `rn-patches/` into each consumer's `patches/` (`--check` reports drift). |
+| `clean.sh` / `clean_rn.sh` | Reclaim disk from TS library build output/node_modules, and from native iOS/Android build artifacts (only untracked paths). |
+| `lint-workflows.sh` | Run `actionlint` over this repo's workflow YAML (`make lint-workflows`). |
+| `scripts/svg/*` | PNG→SVG vectorizers + Sudobility logo generator (Python; see `scripts/svg/SVG.md`). Note: input/output paths are hardcoded and must be edited before reuse. |
+
+## React Native patches (`rn-patches/`)
+
+Canonical RN dependency patches for the family, applied via **bun `patchedDependencies`**
+(filenames `name@version.patch`). `rn-patches/manifest.json` is the single source of truth —
+it lists each patch, why it exists, and which consumer repos use it. `scripts/sync_rn_patches.sh`
+copies each canonical file into its consumers' `patches/` dir so every project stays
+byte-identical; each consumer must also declare the patch in its `package.json`
+`patchedDependencies` (patches stay vendored per-project because CI uses
+`bun install --frozen-lockfile`). No `patch-package` anywhere.
 
 ## License
 

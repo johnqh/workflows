@@ -1,355 +1,110 @@
-# workflows - AI Development Guide
+# workflows — AI Development Guide
 
 > **Git policy — never auto-commit or auto-push.** Leave your work in the working tree.
-> Run `git commit`, `git push`, `gh pr create`, or `scripts/push_all.sh` **only when the user
-> explicitly asks in that turn**. Approval for an earlier change does not carry forward, and
-> finishing a task is not permission to commit it.
+> Run `git commit`, `git push`, `gh pr create`, or `scripts/push_projects.sh` **only when the
+> user explicitly asks in that turn**. Approval for an earlier change does not carry forward,
+> and finishing a task is not permission to commit it. Stay on the current branch; do not
+> create feature branches for code changes.
 
-## Overview
+## What this is
 
-Shared GitHub Actions CI/CD workflows, localization scripts, and utility tooling for the entire 0xmail (Web3 Email) ecosystem. The centerpiece is a single reusable GitHub Actions workflow (`unified-cicd.yml`) that auto-detects deployment targets based on which secrets are configured in consuming repositories. The repository also provides LLM-powered and batch translation scripts for i18n, a multi-project push/release orchestration script, and SVG generation utilities.
+The shared repo `johnqh/workflows` (published as the **private** package `@0xmail/workflows`,
+currently v1.0.50). It is consumed by the whole Sudobility / 0xmail family — RN apps, TS
+libraries, web apps, Python packages — via GitHub Actions `uses:`, raw-URL script fetches, or
+checkout-alongside. Not an app; it ships reusable workflows + CLIs + scripts + RN patches.
 
-- **Package**: `@0xmail/workflows` (v1.0.0)
-- **License**: MIT
-- **Package Manager**: Bun (bun.lock present), npm also supported
-- **Language**: YAML (GitHub Actions), Shell (Bash), CommonJS (Node.js), Python 3
-- **Runtime Dependencies**: axios (^1.7.9), dotenv (^16.4.5)
-- **GitHub Ref**: `johnqh/workflows` (consumed via `uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main`)
+- **Deps**: axios (~1.20.0), dotenv (~16.6.1). Package manager: Bun (`bun.lock`) or npm.
+- **Languages**: YAML (Actions), Bash, CommonJS/mjs/tsx (Node), Python 3.
+- Full reference lives in `README.md` and `app_store/README.md` — don't duplicate file-level
+  detail here.
 
-## Project Structure
+## Catalog (high level)
 
-```
-workflows/
-├── .github/workflows/
-│   └── unified-cicd.yml              # The reusable CI/CD workflow (~824 lines)
-├── scripts/
-│   ├── generate-seo-assets.mjs        # Multilingual SEO generator (sitemap, robots, per-route HTML)
-│   ├── generate-seo-assets-v2.mjs     # v2: sitemap index + per-language sitemaps, head hooks, JSON-LD
-│   ├── process-static-files.ts       # Generic {{...}} template processor for static files
-│   ├── localize.cjs                  # LLM-first i18n translation (LM Studio + DeepL fallback)
-│   ├── localize_batch.cjs            # Batch translation via Whisperly API
-│   ├── cf-pages-sync-env.sh          # Sync .env to Cloudflare Pages secrets
-│   ├── push_projects.sh              # Multi-project dependency update, validate, bump, push
-│   ├── lint-workflows.sh             # actionlint runner for workflow YAML validation
-│   └── svg/
-│       ├── SVG.md                    # Documentation for SVG scripts
-│       ├── requirements.txt          # Python dependencies for vectorization scripts
-│       ├── generate_logo_svg.py      # Programmatic SVG logo generator (Sudobility S-grid)
-│       ├── vectorize_logo.py         # SLIC superpixel PNG-to-SVG vectorizer
-│       ├── vectorize_quantized.py    # K-means color quantization PNG-to-SVG vectorizer
-│       └── vectorize_vtracer.py      # vtracer wrapper for PNG-to-SVG conversion
-├── examples/
-│   ├── library-public.yml            # Example: public npm library (design_system)
-│   ├── library-restricted.yml        # Example: private npm library (di, types, etc.)
-│   ├── docker-app.yml                # Example: Docker app (mail_box_indexer, wildduck)
-│   └── webapp-cloudflare.yml         # Example: Cloudflare Pages web app (mail_box)
-├── docs/
-│   └── DEPLOYMENT.md                 # Step-by-step secret configuration for all providers
-├── Makefile                          # Make targets: lint-workflows, help
-├── test-workflows-locally.sh         # Local CI/CD test runner for all ecosystem projects
-├── package.json
-├── bun.lock / package-lock.json
-└── README.md
-```
+- **`.github/workflows/unified-cicd.yml`** — main reusable CI/CD, ~1500 lines, **10 jobs**:
+  `test`, `check_for_release`, `release_npm`, `release_github_packages`, `release_pypi`,
+  `release_python`, `deploy_docker`, `deploy_cloudflare`, `deploy_railway`, `deploy_vercel`.
+  Handles Node/Bun **and** Python. Auto-detects targets from configured secrets.
+- **`.github/workflows/python-cicd.yml`** — lean Python-only (test + optional tag/release,
+  no publish/deploy); needs only `contents: write`.
+- **`.github/workflows/app-store.yml`** — CI-able app-store submission (metadata, Android→Play,
+  Windows→Microsoft Store); screenshot capture stays local.
+- **`app_store/`** — the `appstore` / `store` CLI toolkit (screenshots, localize, build,
+  submit across Apple/Google/Microsoft; `doctor`, `status`). See `app_store/README.md`.
+- **`scripts/`** — SEO generators, i18n, token rotation, trusted-publisher setup, per-package
+  publish/safety gates, Cloudflare env, cleanup, RN-patch sync, multi-repo push. See README.
+- **`rn-patches/`** — canonical RN dependency patches; `manifest.json` is source of truth.
 
-## Key Components
+## Conventions (how consumers use it)
 
-### Unified CI/CD Workflow (`.github/workflows/unified-cicd.yml`)
+- Caller workflow file is **`.github/workflows/ci-cd.yml`** in each repo. This name matters:
+  npm **trusted publishers** are configured against `johnqh/<repo>` + `ci-cd.yml` (NOT
+  `unified-cicd.yml`).
+- **Required caller permissions for `unified-cicd.yml`**: `contents: write`, `id-token: write`,
+  `deployments: write` — all three, always. GitHub validates the union of all jobs' permissions
+  at compile time (before `if:`), so even a Python-only/no-publish caller that grants fewer
+  hits `startup_failure` with no logs. Add `packages: write` when `publish-target: github`.
+  `python-cicd.yml` needs only `contents: write`.
+- **`publish-target` input** (per-repo npm destination): `npm` (default) = npmjs.org via **OIDC
+  trusted publishing**, no token; `github` = GitHub Packages via built-in `GITHUB_TOKEN`.
+- **`NPM_TOKEN` is read-only** everywhere: installs private deps + pre-checks the published
+  version. It **cannot publish** (OIDC does the npmjs publish). Apps that only need it for
+  private deps pass it and set `skip-npm-publish: true`.
+- **Consuming `@sudobility/*`**: this repo's `.npmrc` maps `@sudobility` →
+  `https://npm.pkg.github.com` (GitHub Packages). Install auth is **`GH_PACKAGES_READ_TOKEN`**
+  (read:packages PAT), falling back to `GITHUB_TOKEN`. `GIT_DEP_TOKEN` is a deprecated alias.
+  Secret is named `GH_PACKAGES_READ_TOKEN` because Actions rejects `GITHUB_*` secret names.
+- **Package access** comes from each package's `publishConfig.access`; the `npm-access` input
+  is **deprecated and ignored** (publish runs without `--access`).
+- Secret-based auto-detection: a deploy job runs only when its secrets are set. `develop` branch
+  and PRs run **tests only** (no deploy, no release). Deploys happen on push to `main` only.
+- Bun is pinned to **1.4.4** (not `latest`) for deterministic installs; `setup-bun` is retried
+  up to 3×. Build prefers `build:ci` then `build`; tests prefer `test:unit`.
+- Build env injection: secrets matching `VITE_*`, `REACT_APP_*`, `NEXT_PUBLIC_*`, `BUILD_*` are
+  auto-exported into the build.
+- Pin the workflow ref with `@v1` / `@v1.0.0` for stability; `@main` is latest.
 
-A single reusable `workflow_call` that every ecosystem project references. Contains seven jobs that run conditionally based on secrets and branch context.
+## Gotchas / non-obvious
 
-**Jobs:**
+- **Bootstrap a brand-new npm package with `scripts/publish-local.sh`** — npm requires a package
+  to exist before a trusted publisher can be attached; after that, CI/OIDC publishes it.
+- **`scripts/check-package-entry.cjs` must run under Node, not Bun** — Bun's permissive resolver
+  hides the extensionless-ESM-import bug it exists to catch.
+- **rn-patches are vendored per-project** (bun `patchedDependencies`, not patch-package). The
+  canonical file lives here; `scripts/sync_rn_patches.sh` copies it into each consumer's
+  `patches/`, and each consumer must also declare it in its `package.json`. CI uses
+  `bun install --frozen-lockfile`, so the file must be present in the consumer.
+- **The old SMTP email-on-failure feature is REMOVED** from `unified-cicd.yml` (no
+  `notification-email` input, no `SMTP_*` secrets, no notify job). `examples/docker-app.yml`
+  still passes them — valid only against an older pinned tag, not `@main`.
+- **Python is in two places with different defaults**: `unified-cicd.yml` (`python-package-manager`
+  default `uv`, `github-release` default `false`, can publish to PyPI) vs `python-cicd.yml`
+  (`pip`, `github-release` default `true`, no publish). Pick deliberately.
+- **Trusted-publisher scripts target npmjs.com only** — `setup-/verify-trusted-publishers.sh`
+  use `npm trust` (npmjs OIDC, npm ≥ 11.5.1, interactive 2FA). GitHub Packages has no
+  `npm trust`, so they don't apply to packages published via `publish-target: github`. They
+  hardcode `OWNER=johnqh` and workflow `ci-cd.yml`.
+- **Token-rotation scripts only provision the `NPM_TOKEN` secret name** (`rotate-npm-token-github.sh`
+  → Actions secret, `rotate-npm-token-cloudflare.py` → CF Pages env). They do **not** refresh
+  `GH_PACKAGES_READ_TOKEN`. Rotate that separately if CI reads GitHub Packages with it.
+- **`app-store.yml`'s android install hardcodes `@sudobility` → npmjs.org with `NPM_TOKEN`**
+  (install-only) — inconsistent with the GitHub Packages migration path elsewhere.
+- **Ecosystem-dir inconsistency**: `test-workflows-locally.sh` scans `$HOME/0xmail` (legacy);
+  `push_projects.sh` / `clean*.sh` / `app_store` default to `~/projects`.
+- **`scripts/svg/*` have hardcoded `/Users/johnhuang/...` input/output paths** and (except the
+  vtracer one) take no CLI args — edit before reuse.
 
-1. **`test`** -- Always runs. Auto-detects package manager (Bun or npm). Runs type checking, linting, tests, and build. Passes `VITE_*`, `REACT_APP_*`, `NEXT_PUBLIC_*`, `BUILD_*` secrets as build env vars. Has Rollup optional dependency workaround.
-
-2. **`check_for_release`** -- Gates deployment jobs. Skips on `develop` branch, unmerged PRs, and `[skip ci]`/`[skip-ci]` commits. Extracts version and package name from `package.json`.
-
-3. **`release_npm`** -- Compares `package.json` version against npm registry. Builds, creates GitHub release, publishes. Respects `npm-access` and `skip-npm-publish`.
-
-4. **`deploy_docker`** -- Multi-arch Docker images (arm64 + amd64) via QEMU + Buildx. Checks Docker Hub API for existing tags. Tags as `latest` and `vX.Y.Z`. Passes `NPM_TOKEN` as build arg.
-
-5. **`deploy_cloudflare`** -- Deploys `dist/` to Cloudflare Pages. Non-blocking linting.
-
-6. **`deploy_railway`** -- Deploys via Railway CLI (`railway up --detach`).
-
-7. **`deploy_vercel`** -- Deploys to Vercel production via CLI.
-
-**Secret-Based Auto-Detection:**
-
-| Secrets Present | Deployment Target |
-|---|---|
-| `NPM_TOKEN` | npm publish + GitHub release |
-| `DOCKERHUB_USERNAME` + `DOCKERHUB_TOKEN` | Multi-arch Docker Hub push |
-| `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | Cloudflare Pages |
-| `RAILWAY_TOKEN` + `RAILWAY_SERVICE` | Railway |
-| `VERCEL_TOKEN` + `VERCEL_ORG_ID` + `VERCEL_PROJECT_ID` | Vercel |
-| `SMTP_HOST` + `SMTP_USERNAME` + `SMTP_PASSWORD` | Email on develop branch test failures |
-
-**Workflow Inputs:**
-
-| Input | Type | Default | Description |
-|---|---|---|---|
-| `node-version` | string | `"22.x"` | Node.js version |
-| `bun-version` | string | `"latest"` | Bun version (when bun.lock detected) |
-| `npm-access` | string | `"restricted"` | npm visibility (`public` or `restricted`) |
-| `skip-npm-publish` | boolean | `false` | Skip npm publish (apps needing NPM_TOKEN for private deps only) |
-| `cloudflare-project-name` | string | `""` | Cloudflare project name (defaults to repo name) |
-| `docker-image-name` | string | `""` | Docker image name (defaults to repo name) |
-
-**Branch Behavior:**
-- `main`: Full CI/CD including deployments
-- `develop`: Tests only, optional email notifications on failure
-- Pull requests: Tests only
-
-### SEO Asset Generator (`scripts/generate-seo-assets.mjs`)
-
-Generates per-route, per-language `index.html` files with localized meta tags (title, description, keywords, Open Graph, Twitter), canonical URLs, hreflang alternate links, `sitemap.xml`, and `robots.txt` for multilingual static sites.
-
-**Config-driven**: Reads project-specific `seo.config.mjs` from the working directory (or `--config <path>`). Config defines supported languages, hreflang map, domain, routes with locale-based meta functions, and optional strip patterns.
-
-**Features:**
-- Locale fallback: merges localized JSON with English fallback via deep merge
-- `{{appName}}`, `{{date}}` interpolation in locale strings (extensible via `interpolationVars`)
-- Non-production host detection: auto-sets `noindex` and skips hreflang on staging/preview domains
-- `canonicalPath` support: routes can point canonical to a different path (e.g., `/docs` → `/docs/getting-started`)
-- `stripPatterns`: project-specific regex patterns to strip legacy HTML blocks
-
-**Usage:**
-```bash
-node generate-seo-assets.mjs public                       # sitemap + robots only (no index.html in public/)
-node generate-seo-assets.mjs dist                         # full generation after Vite build
-node generate-seo-assets.mjs --config ./seo.config.mjs dist
-```
-
-**Typical build integration:**
-```json
-"seo:fetch": "curl -fsSL https://raw.githubusercontent.com/johnqh/workflows/main/scripts/generate-seo-assets.mjs -o /tmp/generate-seo-assets.mjs",
-"build": "bun run seo:fetch && node /tmp/generate-seo-assets.mjs public && tsc -b && vite build && node /tmp/generate-seo-assets.mjs dist"
-```
-
-### SEO Asset Generator v2 (`scripts/generate-seo-assets-v2.mjs`)
-
-Drop-in successor to `generate-seo-assets.mjs`. The original is kept unchanged so existing projects are unaffected; opt into v2 per project by fetching `generate-seo-assets-v2.mjs` instead. Same `seo.config.mjs` contract.
-
-**What v2 adds over v1:**
-- **Sitemap index**: `sitemap.xml` is now a `<sitemapindex>` pointing at per-language `sitemap-<lang>.xml` children (English listed first). Each child holds only its language's `<loc>` entries plus the full hreflang cluster. This lets you submit the English sitemap first in Search Console so English pages are crawled/indexed ahead of translations (mitigates "Crawled - currently not indexed" on large multilingual URL sets) while keeping every language discoverable.
-- Managed `<head>` injection (`stripManagedHead` + `buildManagedMetaBlock`) instead of per-tag regex replacement.
-- Route-level `staticHtml(locale, ctx, route)` and `structuredData(locale, ctx, route)` hooks for crawlable fallback content and JSON-LD.
-- `cleanText` + unresolved-`{{placeholder}}` assertion on meta fields.
-- `trailingSlashUrls` control and per-route `namespaces` / `ogType` (defaults to `website`).
-- Richer `robots.txt` covering standard search engines + AI crawlers.
-
-**Migration caveat:** any consumer that reads `sitemap.xml` as a flat `<urlset>` (e.g. a prerender step extracting `<loc>` page URLs) must resolve the `<sitemapindex>` to its child sitemaps first — `sitemap.xml`'s `<loc>`s are now child-sitemap files, not pages.
-
-**Usage** (identical CLI to v1):
-```bash
-node generate-seo-assets-v2.mjs public
-node generate-seo-assets-v2.mjs dist
-node generate-seo-assets-v2.mjs --config ./seo.config.mjs dist
-```
-
-### Localization Script (`scripts/localize.cjs`)
-
-Translates i18n JSON locale files from English (`en/`) to 15 target languages (ar, de, es, fr, it, ja, ko, pt, ru, sv, th, uk, vi, zh, zh-hant).
-
-**Dual translation strategy:**
-1. **Primary**: LM Studio local LLM (OpenAI-compatible API). Anti-hallucination safeguards: configurable length ratio check (`--max-length-ratio`, default 3.0), configurable max tokens (`--max-tokens`, default 500), temperature 0.1, configurable retries (`--max-retries`, default 3).
-2. **Fallback**: DeepL API with XML tag handling for placeholders.
-3. **Both fail**: Keeps original English text and logs at WARN level with the key name and target language.
-
-**Preservation**: Wraps `{placeholders}`, `{{double}}`, brand names (MetaMask, Phantom, WalletConnect, etc.), technical terms (Web3, DApp, NFT, DAO, DeFi, ENS, SNS), domain names, ISO 8601 strings, and `.box` TLD in `<xx>` tags to prevent translation.
-
-**RTL handling**: Arabic output sanitized to remove directional control characters and validated for JSON integrity.
-
-**Incremental**: Skips keys that already have non-empty translations.
-
-**Required env var**: `VITE_APP_DEEPL_API_KEY` (from `.env`, `.env.local`, or `--env` flag).
-
-### Batch Localization Script (`scripts/localize_batch.cjs`)
-
-Alternative translation using the Whisperly batch API. Flattens JSON to dot-notation paths, identifies missing translations per language, batches strings (configurable `--batch-limit`, default 100), sends POST requests with Bearer auth, and writes output preserving source structure. Uses `fetch()` with 120s timeout and 3 retries.
-
-**Required**: `WHISPERLY_API_KEY` via `--api-key` or env var.
-
-### Push Projects Script (`scripts/push_projects.sh`)
-
-Multi-project orchestration for the 0xmail ecosystem. Can be sourced or run directly.
-
-**Auto-detects package managers** (bun, pnpm, yarn, npm) via lockfiles. Provides `pm_install`, `pm_run`, `pm_exec`, `pm_version_bump` wrappers.
-
-**Per-project pipeline:** detect PM, update `@sudobility/*` deps to latest, optionally process sub-packages, check for changes, validate (typecheck/lint/test/build), bump patch version, update lockfile, generate commit message (AI or heuristic), commit and push.
-
-**React Native apps are never version-bumped.** A project with `react-native` in `dependencies` and an `ios/` or `android/` directory (`is_react_native_app`) is validated, committed and pushed at its existing version, even with `--force`; its version is the store release version. RN libraries (`*_rn` packages with `react-native` as a peer/dev dependency) are still bumped so CI publishes them.
-
-**AI commit messages**: Uses `claude -p --model haiku` to generate meaningful conventional commit messages from the staged diff. Falls back to heuristic analysis if `claude` CLI is not available. Disable with `--no-ai`.
-
-**Flags**: `--force`/`-f`, `--subpackages`/`-s`, `--continue-on-error`/`-c`, `--no-ai`, `--projects-file`, `--starting-project`, `--help`/`-h`. Project spec format: `path:delay_seconds`.
-
-### SVG Utilities (`scripts/svg/`)
-
-- **`generate_logo_svg.py`**: Generates Sudobility S-grid logo (13 gradient-colored rounded rects).
-- **`vectorize_vtracer.py`**: vtracer wrapper. Best quality (PSNR ~20.6 dB). Requires `cargo install vtracer`.
-- **`vectorize_quantized.py`**: K-means quantization + contour tracing. Requires cv2, numpy.
-- **`vectorize_logo.py`**: SLIC superpixel segmentation with iterative refinement. Requires cv2, numpy, scipy, skimage, sklearn, rsvg-convert.
-
-### Local Test Runner (`test-workflows-locally.sh`)
-
-Runs CI steps locally for all ecosystem projects. Projects: `design_system` (public lib), `di`/`mail_box_components`/`mail_box_configs`/`mail_box_contracts`/`mail_box_indexer_client`/`mail_box_lib`/`types`/`wildduck_client` (restricted libs), `mail_box` (web app), `mail_box_indexer` (Docker app). Uses `build:ci` for `mail_box_contracts`. Prefers `test:unit` when available.
-
-## Development Commands
+## Common dev commands
 
 ```bash
-# Validate workflow YAML files with actionlint
-make lint-workflows
-./scripts/lint-workflows.sh
-
-# SEO asset generation (requires seo.config.mjs in project root)
-node scripts/generate-seo-assets.mjs public          # sitemap + robots to public/
-node scripts/generate-seo-assets.mjs dist             # full per-route HTML to dist/
-node scripts/generate-seo-assets.mjs --config path/to/seo.config.mjs dist
-
-# Localization (LM Studio + DeepL fallback)
-node scripts/localize.cjs ./public/locales
-node scripts/localize.cjs ./public/locales --llm-host 192.168.1.100 --llm-port 8080
-node scripts/localize.cjs ./public/locales --env ./.env.local
-node scripts/localize.cjs ./public/locales --max-length-ratio 4.0 --max-tokens 800 --max-retries 5
-
-# Batch localization (Whisperly API)
-node scripts/localize_batch.cjs ./public/locales https://api.whisperly.dev/.../translate --api-key wh_xxx
-
-# Test all ecosystem projects locally
-./test-workflows-locally.sh
-
-# Push all projects
-bash scripts/push_projects.sh --projects-file ./projects.txt
-bash scripts/push_projects.sh --projects-file ./projects.txt --force --subpackages
-bash scripts/push_projects.sh --projects-file ./projects.txt --continue-on-error
-
-# Install dependencies for this repo
-bun install   # or: npm install
+make lint-workflows          # actionlint over .github/workflows/*.yml (= ./scripts/lint-workflows.sh)
+bun install                  # or: npm install
+./test-workflows-locally.sh  # runs CI steps for consuming projects (expects $HOME/0xmail)
 ```
 
-## Architecture / Patterns
+## Adding to the workflow
 
-### Secret-Based Auto-Detection
-
-Deployment targets are enabled only when their required secrets are configured. The Cloudflare configuration is detected in `check_for_release` and exposed as a job output, so projects without Cloudflare credentials skip the entire Cloudflare job before checkout, dependency installation, or build. Multiple targets coexist (e.g., npm + Docker for wildduck).
-
-### Package Manager Auto-Detection
-
-The CI/CD workflow and push_projects script both detect the package manager by checking lockfiles: `bun.lock`/`bun.lockb` > `pnpm-lock.yaml` > `yarn.lock` > `package-lock.json` > default npm.
-
-### Version-Existence Checks
-
-Each deployment job checks its target registry before deploying, making deployments idempotent:
-- **npm**: `npm view <package> version` vs `package.json`
-- **Docker Hub**: HTTP GET to tags API (200 = exists, skip)
-
-### Translation Fallback Chain
-
-`localize.cjs`: local LLM (free, fast) -> DeepL API (reliable cloud) -> keep original English. Anti-hallucination length check (3.0x ratio) catches LLM explanatory text.
-
-### Build Env Var Injection
-
-Secrets matching `VITE_*`, `REACT_APP_*`, `NEXT_PUBLIC_*`, `BUILD_*` are auto-exported during build via `jq` extraction from `${{ toJSON(secrets) }}`. No per-project configuration needed.
-
-### Incremental Translation
-
-Both localization scripts skip keys with existing non-empty translations.
-
-## Common Tasks
-
-### Adding a New Deployment Target
-
-1. Add secret declarations under `workflow_call.secrets` in `unified-cicd.yml`
-2. Add a new job: check-secrets step, guard all steps with `if: steps.check-secrets.outputs.configured == 'true'`, add version check + deploy + notification steps
-3. Set `needs: [test, check_for_release]`
-4. Add example in `examples/`, update README.md and docs/DEPLOYMENT.md
-
-### Using the Workflow in a Consuming Project
-
-Create `.github/workflows/ci-cd.yml`. See `examples/` for ready-to-copy templates:
-- `library-public.yml` -- public npm (design_system)
-- `library-restricted.yml` -- private npm (di, types, etc.)
-- `docker-app.yml` -- Docker + develop branch notifications
-- `webapp-cloudflare.yml` -- Cloudflare Pages
-
-Minimal example (public library):
-```yaml
-name: CI/CD
-on:
-  push: { branches: [main] }
-  pull_request: { branches: [main] }
-permissions: { contents: write, id-token: write, deployments: write }
-jobs:
-  cicd:
-    uses: johnqh/workflows/.github/workflows/unified-cicd.yml@main
-    secrets:
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-```
-
-### Adding a New Language to Localization
-
-1. In `localize.cjs`: add to `languages` object and `languageNames` object
-2. In `localize_batch.cjs`: add to `targetLanguages` array
-3. Run the script -- new language directory and translations are created automatically
-
-### Adding Preserved Terms in Localization
-
-In `localize.cjs` `translateWithPlaceholders()`: add to `technicalTerms` or `walletNames` arrays.
-
-### Setting Up push_projects
-
-Create a projects file or source the script with a PROJECTS array:
-```bash
-# projects.txt (path:delay_seconds)
-../types:0
-../di:0
-../lib:60
-../app:0
-```
-Run: `bash scripts/push_projects.sh --projects-file ./projects.txt`
-
-### Pinning Workflow Version
-
-Use a tag instead of `@main`: `uses: johnqh/workflows/.github/workflows/unified-cicd.yml@v1.0.0`
-
-## Key Dependencies
-
-### Runtime (Node.js)
-
-| Package | Version | Purpose |
-|---|---|---|
-| `axios` | ^1.7.9 | HTTP client for LM Studio and DeepL APIs |
-| `dotenv` | ^16.4.5 | Load `.env` files for API keys |
-
-### CI/CD (GitHub Actions)
-
-| Action | Version | Purpose |
-|---|---|---|
-| `actions/checkout` | v4 | Repository checkout |
-| `actions/setup-node` | v4 | Node.js setup |
-| `oven-sh/setup-bun` | v2 | Bun runtime setup; each use is retried up to 3 times (30s, then 60s apart) because GitHub Releases downloads intermittently return 504 |
-| `docker/setup-qemu-action` | v3 | QEMU for multi-arch builds |
-| `docker/setup-buildx-action` | v3 | Docker Buildx |
-| `docker/login-action` | v3 | Docker Hub auth |
-| `docker/metadata-action` | v5 | Image tag/label generation |
-| `docker/build-push-action` | v6 | Docker build and push |
-| `cloudflare/pages-action` | v1 | Cloudflare Pages deployment |
-| `softprops/action-gh-release` | v2 | GitHub release creation |
-
-### Python (SVG scripts, not in package.json)
-
-`opencv-python`, `numpy`, `scipy`, `scikit-image`, `scikit-learn` for vectorization scripts (see `scripts/svg/requirements.txt`). `vtracer` (Rust CLI, `cargo install vtracer`) and `rsvg-convert` (system CLI) for rendering. Install Python deps with: `pip install -r scripts/svg/requirements.txt`.
-
-### Ecosystem Projects
-
-All scoped under `@sudobility/` on npm:
-- Public: `design_system`
-- Restricted: `di`, `mail_box_components`, `mail_box_configs`, `mail_box_contracts`, `mail_box_indexer_client`, `mail_box_lib`, `types`, `wildduck_client`
-- Web apps: `mail_box`
-- Docker apps: `mail_box_indexer`
-
-## Git Workflow
-
-- Do not use feature branches for code changes. Always stay on the current branch.
+To add a deploy target to `unified-cicd.yml`: declare its secrets under
+`workflow_call.secrets`, add a job with a check-secrets step (guard every step on
+`steps.check-secrets.outputs.configured == 'true'`), `needs: [test, check_for_release]`, plus a
+version-existence check, then add an `examples/` template and update `README.md` +
+`docs/DEPLOYMENT.md`. Validate with `make lint-workflows` before pushing.
