@@ -1261,8 +1261,18 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          build-args: |
-            GH_PACKAGES_TOKEN=${{ secrets.GH_PACKAGES_READ_TOKEN || secrets.GITHUB_TOKEN }}
+          # The private-registry token is passed as a BuildKit SECRET, not a
+          # build-arg. A build-arg's value can be recorded in the image's
+          # provenance attestation / history and pushed to the public registry
+          # (that is how the token kept leaking and getting auto-revoked). A
+          # secret mount is never written to a layer, history, cache or
+          # provenance. Dockerfiles consume it via:
+          #   RUN --mount=type=secret,id=gh_packages_token ...
+          secrets: |
+            gh_packages_token=${{ secrets.GH_PACKAGES_READ_TOKEN || secrets.GITHUB_TOKEN }}
+          # Do not attach a provenance attestation (it was the public surface
+          # the build-arg leaked through); nothing here needs it.
+          provenance: false
 
       - name: "Notify Docker deployment success"
         if: success() && steps.check-secrets.outputs.configured == 'true' && steps.check-docker-version.outputs.version_exists != 'true'
